@@ -1,8 +1,5 @@
 /*
- * Copyright (c) 2010, Sven C. Koehler
- * 
- * The code for parsing and interpreting scheme code is based on Peter
- * Norvig's clis.py: <http://norvig.com/lispy.html>
+ * Copyright (c) 2010, 2011, Sven C. Koehler
  */
 
 #include <stdio.h>
@@ -14,6 +11,8 @@
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/mman.h>
+#include <time.h>
+#include <sys/time.h>
 
 #define CL_VERSION "0.0.1"
 
@@ -31,13 +30,15 @@ typedef union {
   } t;
 } Id;
 
+
 #define CL_ADR(va) va.t.d.address
 #define CL_TYPE(va) va.t.type
 #define CL_INT(va) va.t.d.i
 #define CL_FLOAT(va) va.t.d.f
 
 static Id clNil = {0}; 
-static Id clTrue = {0};
+static Id clTrue = {0}; // This is set to 1 later
+static Id clTail = {0}; // set to 2 later
 
 /*
  * Basic error handling
@@ -125,20 +126,24 @@ typedef struct {
 
 size_t cl_header_size() { return CL_STATIC_ALLOC_SIZE; }
 Id cl_header_size_ssa() { Id a; CL_ADR(a) = 1; return a; }
-cl_mem_descriptor_t *cl_md;
-void *cl_base;
+#define cl_md __cl_md(b)
+void *cl_heap;
+void *cl_perf;
+
+cl_mem_descriptor_t *__cl_md(void *b) { return b; }
 
 
 #define VA_TO_PTR0(va) \
-  ((va).s ? cl_base + RCS + ((size_t)CL_ADR(va) * CL_STATIC_ALLOC_SIZE) : 0) 
+  ((va).s ? b + RCS + ((size_t)CL_ADR(va) * CL_STATIC_ALLOC_SIZE) : 0) 
 #define PTR_TO_VA(va, p) \
-  CL_ADR(va) = (int)(((p) - RCS - (char *)cl_base) / CL_STATIC_ALLOC_SIZE);
+  CL_ADR(va) = (int)(((p) - RCS - (char *)b) / CL_STATIC_ALLOC_SIZE);
 
 #define P_0_R(p, r) if (!(p)) { printf("From %s:%d\n", __FUNCTION__, __LINE__); return (r); }
+#define P_0_R2(w, l, p, r) if (!(p)) { printf("From %s:%d\n", w, l); return (r); }
 #define VA_0_R(va, r) if (!(va).s) { return (r); }
-#define VA_TO_PTR(va) (__ca(va, __FUNCTION__, __LINE__) ? VA_TO_PTR0(va) : 0 )
+#define VA_TO_PTR(va) (__ca(b, va, __FUNCTION__, __LINE__) ? VA_TO_PTR0(va) : 0 )
 
-int __ca(Id va, const char *where, int line) {
+int __ca(void *b, Id va, const char *where, int line) {
   char *p0 = VA_TO_PTR0(va); P_0_R(p0, 1); 
   rc_t *rc = (rc_t *)(p0 - RCS);
   if ((*rc) == 0) { printf("[%s:%d] error: VA is not allocated!\n", where, line); abort(); }
@@ -149,25 +154,27 @@ int __ca(Id va, const char *where, int line) {
 int cnil(Id i) { return i.s == clNil.s; }
 Id cb(int i) { return i ? clTrue : clNil; }
 
-cl_mem_chunk_descriptor_t *cl_md_first_free() {return VA_TO_PTR0(cl_md->first_free);}
+cl_mem_chunk_descriptor_t *cl_md_first_free(void *b) {
+    return VA_TO_PTR0(cl_md->first_free);}
 
-int cl_var_free() {
+
+int cl_var_free(void *b) {
     return (cl_md->total_size - cl_md->heap_size) / CL_STATIC_ALLOC_SIZE; }
   
-void cl_init_memory(void *ptr) {
-  cl_md = ptr;
-  cl_base = ptr;
-  size_t s = ((CL_MEM_SIZE / CL_STATIC_ALLOC_SIZE) * CL_STATIC_ALLOC_SIZE) - 
-      cl_header_size();
+
+#define CL_HEAP_SIZE \
+    ((CL_MEM_SIZE / CL_STATIC_ALLOC_SIZE) * CL_STATIC_ALLOC_SIZE)
+void cl_init_memory(void *b, size_t size) {
+  size_t s = size - cl_header_size();
   cl_md->first_free = cl_header_size_ssa();
   cl_md->total_size = s;
-  cl_mem_chunk_descriptor_t *c = cl_md_first_free();
+  cl_mem_chunk_descriptor_t *c = cl_md_first_free(b);
   c->next.s = 0;
   c->size = s;
 }
 
-Id cl_valloc(const char *where, short int type) {
-  cl_mem_chunk_descriptor_t *c = cl_md_first_free(); 
+Id cl_valloc(void *b, const char *where, short int type) {
+  cl_mem_chunk_descriptor_t *c = cl_md_first_free(b); 
   if (!c) return cl_handle_error_with_err_string_nh(where, "1: Out of memory");
   Id r = { 0x0 };
   if (c->size < CL_STATIC_ALLOC_SIZE)
@@ -193,12 +200,13 @@ Id cl_valloc(const char *where, short int type) {
   return r; 
 }
 
-int cl_zero(Id va) { 
-    char *p = VA_TO_PTR0(va); P_0_R(p, 0); memset(p, 0, CL_CELL_SIZE); return 0;}
+int cl_zero(void *b, Id va) { 
+  char *p = VA_TO_PTR0(va); P_0_R(p, 0); 
+  memset(p, 0, CL_CELL_SIZE); return 0;}
 
-#define CL_ALLOC(va, type) va = cl_valloc(__FUNCTION__, type); VA_0_R(va, clNil);
+#define CL_ALLOC(va, type) va = cl_valloc(b, __FUNCTION__, type); VA_0_R(va, clNil);
 
-int cl_free(Id va) {
+int cl_free(void *b, Id va) {
   int t = CL_TYPE(va);
   if (t == CL_TYPE_BOOL || t == CL_TYPE_FLOAT || t == CL_TYPE_INT) return 0;
   char *used_chunk_p = VA_TO_PTR(va); P_0_R(used_chunk_p, 0);
@@ -255,13 +263,13 @@ int cl_is_number(Id va) {
     return CL_TYPE(va) == CL_TYPE_FLOAT || CL_TYPE(va) == CL_TYPE_INT; }
 int c_type(int t) { return t == CL_TYPE_SYMBOL ? CL_TYPE_STRING : t;}
 int cl_is_type_i(Id va, int t) { return c_type(CL_TYPE(va)) == c_type(t); }
-#define S cl_string_new_c
+#define S(s) cl_string_new_c(b, s)
 
 
 #define CL_CHECK_TYPE(va, _type, r) \
   if (!cl_is_type_i((va), (_type))) { \
     char es[1024]; \
-    snprintf(es, 1023, "Invalid type: Exptected type '%s', have: '%s'", \
+    snprintf(es, 1023, "Invalid type: Expected type '%s', have: '%s'", \
         cl_type_to_cp((_type)), cl_type_to_cp(CL_TYPE(va)));  \
     cl_handle_error_with_err_string_nh(__FUNCTION__, es); \
     return (r); \
@@ -282,33 +290,34 @@ int cl_is_type_i(Id va, int t) { return c_type(CL_TYPE(va)) == c_type(t); }
 #define RCI if (!va.s || va.t.type < 3) { return va; }; char *p0 = VA_TO_PTR0(va); \
   P_0_R(p0, clNil); rc_t *rc = (rc_t *)(p0 - RCS);
 
-int cl_ary_free(Id);
-int cl_ht_free(Id);
+int cl_ary_free(void *b, Id);
+int cl_ht_free(void *b, Id);
 
-Id cl_release(Id va) { 
+Id cl_release(void *b, Id va) { 
   RCI; CL_CHECK_ERROR((*rc <= 1), "Reference counter is already 0!", clNil);
   --(*rc);
   return va;
 }
 
-Id cl_delete(Id va) { 
+Id cl_delete(void *b, Id va) { 
   RCI; 
   if ((*rc) == 0x0) return clNil; // ignore, so one can jump at random address!
   CL_CHECK_ERROR((*rc != 1), "Cannot delete, rc != 0!", clNil);
   switch (CL_TYPE(va)) {
-    case CL_TYPE_ARRAY: cl_ary_free(va); break;
-    case CL_TYPE_HASH: cl_ht_free(va); break;
+    case CL_TYPE_ARRAY: cl_ary_free(b, va); break;
+    case CL_TYPE_HASH: cl_ht_free(b, va); break;
     case CL_TYPE_HASH_PAIR: /* ignore: will always be freed by hash */; break;
-    default: cl_free(va); break;
+    default: cl_free(b, va); break;
   }
   (*rc) = 0x0;
   return clTrue;
 }
 
-void cl_garbage_collect() {
+void cl_garbage_collect(void *b) {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
-  size_t mem_start = cl_md->total_size + cl_header_size() - cl_md->heap_size;
-  char *p = mem_start + cl_base;
+  size_t mem_start = cl_md->total_size + cl_header_size() - 
+      cl_md->heap_size;
+  char *p = mem_start + b;
   size_t i;
   for (i = 0; i < entries; ++i, p += CL_STATIC_ALLOC_SIZE) {
     rc_t *rc = (rc_t *)p;
@@ -317,12 +326,12 @@ void cl_garbage_collect() {
       Id va;
       PTR_TO_VA(va, p + RCS);
       CL_TYPE(va) = *t;
-      cl_delete(va);
+      cl_delete(b, va);
     }
   }
 }
 
-Id cl_retain(Id va) { RCI; (*rc)++; return va; }
+Id cl_retain(void *b, Id va) { RCI; (*rc)++; return va; }
 
 /*
  * String
@@ -330,7 +339,7 @@ Id cl_retain(Id va) { RCI; (*rc)++; return va; }
 
 #define CL_STR_MAX_LEN (CL_CELL_SIZE - sizeof(cl_string_size_t))
 
-int cl_strdup(Id va_dest, char *source, cl_string_size_t l) {
+int cl_strdup(void *b, Id va_dest, char *source, cl_string_size_t l) {
   char *p; CL_TYPED_VA_TO_PTR0(p, va_dest, CL_TYPE_STRING, 0);
   CL_CHECK_ERROR((l + 1 > CL_STR_MAX_LEN), "strdup: string too large", 0);
   *(cl_string_size_t *) p = l;
@@ -341,29 +350,31 @@ int cl_strdup(Id va_dest, char *source, cl_string_size_t l) {
   return 1;
 }
 
-Id cl_string_new(char *source, cl_string_size_t l) { 
+Id cl_string_new(void *b, char *source, cl_string_size_t l) { 
   Id va; CL_ALLOC(va, CL_TYPE_STRING);
-  if (l > 0 && !cl_strdup(va, source, l)) return clNil;
+  if (l > 0 && !cl_strdup(b, va, source, l)) return clNil;
   return va;
 }
 
-Id cl_string_new_c(char *source) { 
-    return cl_string_new(source, strlen(source)); }
-#define S cl_string_new_c
+Id cl_string_new_c(void *b, char *source) { 
+    return cl_string_new(b, source, strlen(source)); }
+#include "debug.c"
 
-Id cl_string_new_number(Id n) { 
+
+Id cl_string_new_number(void *b, Id n) { 
   Id va; CL_ALLOC(va, CL_TYPE_STRING);
   int i = CL_TYPE(n) == CL_TYPE_INT;
   char ns[1024]; 
-  i ? snprintf(ns, 1023, "%d", CL_INT(n)) : snprintf(ns, 1023, "%f", CL_FLOAT(n));
+  i ? snprintf(ns, 1023, "%d", CL_INT(n)) : 
+      snprintf(ns, 1023, "%f", CL_FLOAT(n));
   return S(ns);
 }
 
-Id cl_string_new_0() { return cl_string_new("", 0); }
+Id cl_string_new_0(void *b) { return cl_string_new(b, "", 0); }
 
 typedef struct { char *s; cl_string_size_t l; } cl_str_d;
 
-int cl_acquire_string_data(Id va_s, cl_str_d *d) { 
+int cl_acquire_string_data(void *b, Id va_s, cl_str_d *d) { 
   char *s; CL_TYPED_VA_TO_PTR(s, va_s, CL_TYPE_STRING, 0);
   d->s = s + sizeof(cl_string_size_t); d->l = *(cl_string_size_t *) s; 
   return 1;
@@ -371,10 +382,13 @@ int cl_acquire_string_data(Id va_s, cl_str_d *d) {
 
 int sr = 0;
 #define CL_ACQUIRE_STR_D(n,va,r) \
-  cl_str_d n; sr = cl_acquire_string_data(va, &n); P_0_R(sr, r);
-char *cl_string_ptr(Id va_s) { CL_ACQUIRE_STR_D(ds, va_s, 0x0); return ds.s; }
+  cl_str_d n; sr = cl_acquire_string_data(b, va, &n); P_0_R(sr, r);
+#define CL_ACQUIRE_STR_D2(w,l, n,va,r) \
+  cl_str_d n; sr = cl_acquire_string_data(b, va, &n); P_0_R2(w, l, sr, r);
+char *cl_string_ptr(void *b, Id va_s) { 
+    CL_ACQUIRE_STR_D(ds, va_s, 0x0); return ds.s; }
 
-Id cl_string_append(Id va_d, Id va_s) {
+Id cl_string_append(void *b, Id va_d, Id va_s) {
   CL_ACQUIRE_STR_D(dd, va_d, clNil); CL_ACQUIRE_STR_D(ds, va_s, clNil);
   size_t l = dd.l + ds.l;
   CL_CHECK_ERROR((l + 1 > CL_STR_MAX_LEN), "append: string too large", clNil);
@@ -385,7 +399,7 @@ Id cl_string_append(Id va_d, Id va_s) {
   return va_d;
 }
 
-int cl_string_hash(Id va_s, size_t *hash) {
+int cl_string_hash(void *b, Id va_s, size_t *hash) {
   CL_ACQUIRE_STR_D(ds, va_s, 0); char *s = ds.s;
   size_t v;
   cl_string_size_t i;
@@ -394,22 +408,24 @@ int cl_string_hash(Id va_s, size_t *hash) {
   return 1;
 }
 
-int cl_string_equals_cp_i(Id va_s, char *b) {
-  CL_ACQUIRE_STR_D(ds, va_s, 0); 
-  size_t bl = strlen(b);
+#define cl_string_equals_cp_i(s, sb)  \
+    __cl_string_equals_cp_i(b, __FUNCTION__, __LINE__, s, sb)
+int __cl_string_equals_cp_i(void *b, const char *w, int l, Id va_s, char *sb) {
+  CL_ACQUIRE_STR_D2(w, l, ds, va_s, 0); 
+  size_t bl = strlen(sb);
   if (ds.l != bl) { return 0; }
   cl_string_size_t i;
-  for (i = 0; i < ds.l; i++) { if (ds.s[i] != b[i]) return 0; }
+  for (i = 0; i < ds.l; i++) { if (ds.s[i] != sb[i]) return 0; }
   return 1;
 }
 
 void __cp(char **d, char **s, size_t l, int is) {
     memcpy(*d, *s, l); (*d) += l; if (is) (*s) += l; }
 
-Id cl_string_replace(Id va_s, Id va_a, Id va_b) {
+Id cl_string_replace(void *b, Id va_s, Id va_a, Id va_b) {
   CL_ACQUIRE_STR_D(ds, va_s, clNil); CL_ACQUIRE_STR_D(da, va_a, clNil); 
   CL_ACQUIRE_STR_D(db, va_b, clNil); 
-  Id va_new = cl_string_new_0(); CL_ACQUIRE_STR_D(dn, va_new, clNil);
+  Id va_new = cl_string_new_0(b); CL_ACQUIRE_STR_D(dn, va_new, clNil);
   char *dp = dn.s, *sp = ds.s; P_0_R(dp, clNil)
   size_t i, match_pos = 0;
   for (i = 0; i < ds.l; i++) {
@@ -436,10 +452,10 @@ Id cl_string_replace(Id va_s, Id va_a, Id va_b) {
  * general var handling
  */
 
-size_t cl_hash_var(Id va) {
+size_t cl_hash_var(void *b, Id va) {
   if (CL_TYPE(va) == CL_TYPE_STRING) {
     size_t h;
-    cl_string_hash(va, &h);
+    cl_string_hash(b, va, &h);
     return h;
   }
   return va.s;
@@ -448,16 +464,17 @@ size_t cl_hash_var(Id va) {
 Id cnil2(Id i) { 
     return CL_TYPE(i) == CL_TYPE_ARRAY && cl_ary_len(i) == 0 ? clNil : i; }
 
-int cl_equals_i(Id a, Id b) {
-  if (cl_is_string(a) && cl_is_string(b)) {
-     CL_ACQUIRE_STR_D(da, a, 0); CL_ACQUIRE_STR_D(db, b, 0); 
+#define cl_equals_i(a, o) __cl_equals_i(b, a, o)
+int __cl_equals_i(void *b, Id a, Id o) {
+  if (CL_TYPE(a) == CL_TYPE_STRING && CL_TYPE(o) == CL_TYPE_STRING) {
+     CL_ACQUIRE_STR_D(da, a, 0); CL_ACQUIRE_STR_D(db, o, 0); 
      if (da.l != db.l) return 0;
      cl_string_size_t i;
      for (i = 0; i < da.l; i++) {
         if (da.s[i] != db.s[i]) return 0; }
      return 1;
   } 
-  return cnil2(a).s == cnil2(b).s;
+  return cnil2(a).s == cnil2(o).s;
 }
 
 
@@ -477,11 +494,11 @@ typedef struct {
   Id va_parent;
 } cl_hash_t;
 
-Id cl_ht_new() {
-    Id va_ht; CL_ALLOC(va_ht, CL_TYPE_HASH); cl_zero(va_ht); return va_ht; }
+Id cl_ht_new(void *b) {
+    Id va_ht; CL_ALLOC(va_ht, CL_TYPE_HASH); cl_zero(b, va_ht); return va_ht; }
 
-size_t cl_ht_hash(Id va_s) {
-    return cl_hash_var(va_s) % CL_HT_BUCKETS; }
+size_t cl_ht_hash(void *b, Id va_s) {
+    return cl_hash_var(b, va_s) % CL_HT_BUCKETS; }
 
 int cl_ht_hash_destroy(Id ht) { 
   return 1;
@@ -492,7 +509,7 @@ cl_ht_entry_t cl_ht_null_node = { 0, 0, 0 };
 #define CL_HT_ITER_BEGIN(r) \
   Id va_hr; cl_ht_entry_t *hr = &cl_ht_null_node; \
   cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va_ht, CL_TYPE_HASH, (r)); \
-  size_t k = cl_ht_hash(va_key); \
+  size_t k = cl_ht_hash(b, va_key); \
   for (va_hr = ht->va_buckets[k];  \
       va_hr.s != 0 && hr != NULL; ) { \
     CL_TYPED_VA_TO_PTR(hr, va_hr, CL_TYPE_HASH_PAIR, (r)); \
@@ -500,7 +517,7 @@ cl_ht_entry_t cl_ht_null_node = { 0, 0, 0 };
 
 #define CL_HT_ITER_END(v) } return (v);
 
-int cl_ht_lookup(cl_ht_entry_t **_hr, Id va_ht, Id va_key) {
+int cl_ht_lookup(void *b, cl_ht_entry_t **_hr, Id va_ht, Id va_key) {
   (*_hr) = &cl_ht_null_node; 
   CL_HT_ITER_BEGIN(0) 
     (*_hr) = hr;
@@ -509,55 +526,55 @@ int cl_ht_lookup(cl_ht_entry_t **_hr, Id va_ht, Id va_key) {
   CL_HT_ITER_END(0);
 }
 
-Id cl_ht_delete(Id va_ht, Id va_key) {
+Id cl_ht_delete(void *b, Id va_ht, Id va_key) {
   Id va_p = clNil;
   CL_HT_ITER_BEGIN(clNil);
     cl_ht_entry_t *p = VA_TO_PTR(va_p);
     if (p) { p->va_next = hr->va_next; }
     else { ht->va_buckets[k] = clNil; }
-    cl_release(hr->va_value); cl_release(hr->va_key); cl_free(va_hr);
+    cl_release(b, hr->va_value); cl_release(b, hr->va_key); cl_free(b, va_hr);
     ht->size -= 1;
     return clTrue; 
   next: va_p = va_hr;
   CL_HT_ITER_END(clTrue);
 }
 
-int cl_ht_free(Id va_ht) {
+int cl_ht_free(void *b, Id va_ht) {
   int k; Id va_hr, va_p = clNil; cl_ht_entry_t *hr = &cl_ht_null_node; 
   cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va_ht, CL_TYPE_HASH, 0); 
   for (k = 0; k < CL_HT_BUCKETS; k++) {
     for (va_hr = ht->va_buckets[k]; va_hr.s != 0 && hr != NULL; va_hr = hr->va_next) {
       CL_TYPED_VA_TO_PTR(hr, va_hr, CL_TYPE_HASH_PAIR, 0); 
-      cl_release(hr->va_value); cl_release(hr->va_key); 
-      if (va_p.s) cl_free(va_p);
+      cl_release(b, hr->va_value); cl_release(b, hr->va_key); 
+      if (va_p.s) cl_free(b, va_p);
       va_p = va_hr;
     }
   }
-  if (va_p.s) cl_free(va_p);
-  cl_free(va_ht);
+  if (va_p.s) cl_free(b, va_p);
+  cl_free(b, va_ht);
   return 1;
 }
 
-Id cl_ht_get(Id va_ht, Id va_key) { 
-  cl_ht_entry_t *hr; cl_ht_lookup(&hr, va_ht, va_key);  P_0_R(hr, clNil);
+Id cl_ht_get(void *b, Id va_ht, Id va_key) { 
+  cl_ht_entry_t *hr; cl_ht_lookup(b, &hr, va_ht, va_key);  P_0_R(hr, clNil);
   return hr->va_value;
 }
 
-Id cl_ht_set(Id va_ht, Id va_key, Id va_value) {
+Id cl_ht_set(void *b, Id va_ht, Id va_key, Id va_value) {
   cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va_ht, CL_TYPE_HASH, clNil);
-  cl_ht_entry_t *hr; cl_ht_lookup(&hr, va_ht, va_key);
+  cl_ht_entry_t *hr; cl_ht_lookup(b, &hr, va_ht, va_key);
   size_t v;
   int new_entry = !hr->va_value.s;
   Id va_hr;
   if (new_entry) { 
-    v = cl_ht_hash(va_key);
+    v = cl_ht_hash(b, va_key);
     CL_ALLOC(va_hr, CL_TYPE_HASH_PAIR);
-    cl_retain(va_hr); hr = VA_TO_PTR(va_hr); P_0_R(hr, clNil);
-    hr->va_key = cl_retain(va_key);
+    cl_retain(b, va_hr); hr = VA_TO_PTR(va_hr); P_0_R(hr, clNil);
+    hr->va_key = cl_retain(b, va_key);
     ht->size += 1;
   } 
 
-  hr->va_value = cl_retain(va_value);
+  hr->va_value = cl_retain(b, va_value);
   if (new_entry) {
     hr->va_next = ht->va_buckets[v];
     ht->va_buckets[v] = va_hr;
@@ -567,17 +584,17 @@ Id cl_ht_set(Id va_ht, Id va_key, Id va_value) {
 
 Id cl_symbols;
 
-Id cl_intern(Id va_s) { 
+Id cl_intern(void *b, Id va_s) { 
   if (CL_TYPE(va_s) == CL_TYPE_SYMBOL) CL_TYPE(va_s) = CL_TYPE_STRING;
-  Id va = cl_ht_get(cl_symbols, va_s); 
+  Id va = cl_ht_get(b, cl_symbols, va_s); 
   if (va.s) { return va; }
   Id va_sym = va_s; CL_TYPE(va_sym) = CL_TYPE_SYMBOL;
-  if (cnil(cl_ht_set(cl_symbols, va_s, va_sym))) return clNil;
-  return cl_ht_get(cl_symbols, va_s); 
+  if (cnil(cl_ht_set(b, cl_symbols, va_s, va_sym))) return clNil;
+  return cl_ht_get(b, cl_symbols, va_s); 
 }
 
-Id cl_env_new(Id va_ht_parent) {
-  Id va = cl_ht_new();
+Id cl_env_new(void *b, Id va_ht_parent) {
+  Id va = cl_ht_new(b);
   cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va, CL_TYPE_HASH, clNil);
   ht->va_parent = va_ht_parent;
   return va;
@@ -585,54 +602,59 @@ Id cl_env_new(Id va_ht_parent) {
 
 #define CL_ENV_FIND \
   Id va0 = va_ht, found = clNil; \
-  while (va_ht.s && !(found = cl_ht_get(va_ht, va_key)).s) { \
+  while (va_ht.s && !(found = cl_ht_get(b, va_ht, va_key)).s) { \
     cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va_ht, CL_TYPE_HASH, clNil); \
     va_ht = ht->va_parent; \
   }
 
-Id cl_env_find(Id va_ht, Id va_key) { 
+Id cl_env_find(void *b, Id va_ht, Id va_key) { 
   CL_ENV_FIND; 
   return found; 
 }
 
-Id cl_env_find_and_set(Id va_ht, Id va_key, Id va_value) { 
+Id cl_env_find_and_set(void *b, Id va_ht, Id va_key, Id va_value) { 
   CL_ENV_FIND;
-  if (found.s) { return cl_ht_set(va_ht, va_key, va_value); }
-  else { return cl_ht_set(va0, va_key, va_value); }
+  if (found.s) { return cl_ht_set(b, va_ht, va_key, va_value); }
+  else { return cl_ht_set(b, va0, va_key, va_value); }
 }
 
 Id cl_global_env;
 
-void cl_add_globals(Id env);
+void cl_add_globals(void *b, Id env);
 
-void cl_init() {
+void cl_setup() {
   clTrue.t.d.i = 1;
-  cl_base = cl_shm_create();
-  cl_init_memory(cl_base);
-  cl_symbols = cl_retain(cl_ht_new());
-  cl_global_env = cl_retain(cl_ht_new());
-  cl_add_globals(cl_global_env);
+  clTail.t.d.i = 2;
+}
+
+void *cl_init(void *b, size_t size) {
+  cl_init_memory(b, size);
+  cl_symbols = cl_retain(b, cl_ht_new(b));
+  cl_global_env = cl_retain(b, cl_ht_new(b));
+  cl_add_globals(b, cl_global_env);
   if (cl_interactive) 
-      printf("clispy %s started; %d vars available\n", CL_VERSION, cl_var_free());
+      printf("schemejit %s started; %d vars available\n", CL_VERSION, 
+      cl_var_free(b));
+  return b;
 }
 
 /*
  * FFI
  */
 
-typedef struct { Id (*func_ptr)(Id); } cl_cfunc_t;
+typedef struct { Id (*func_ptr)(void *b, Id); } cl_cfunc_t;
 
-Id cl_define_func(char *name, Id (*p)(Id), Id env) { 
+Id cl_define_func(void *b, char *name, Id (*p)(void *b, Id), Id env) { 
   Id va_f; CL_ALLOC(va_f, CL_TYPE_CFUNC);
   cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR0(cf, va_f, CL_TYPE_CFUNC, clNil);
   cf->func_ptr = p;
-  cl_ht_set(env, cl_intern(S(name)), va_f);
+  cl_ht_set(b, env, cl_intern(b, S(name)), va_f);
   return clTrue;
 }
 
-Id cl_call(Id va_f, Id x) { 
+Id cl_call(void *b, Id va_f, Id x) { 
   cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR(cf, va_f, CL_TYPE_CFUNC, clNil);
-  return cf->func_ptr(x);
+  return cf->func_ptr(b, x);
 }
 
 /*
@@ -646,32 +668,34 @@ typedef struct {
   Id va_entries[CL_ARY_MAX_ENTRIES];
 } ht_array_t;
 
-Id cl_ary_new() {
-    Id va_ary; CL_ALLOC(va_ary, CL_TYPE_ARRAY); cl_zero(va_ary); return va_ary; }
+Id cl_ary_new(void *b) {
+  Id va_ary; CL_ALLOC(va_ary, CL_TYPE_ARRAY); 
+  cl_zero(b, va_ary); return va_ary; 
+}
 
-void __ary_retain_all(ht_array_t *a) {
-    int i = 0; for (i = a->start; i < a->size; i++) cl_retain(a->va_entries[i]);}
+void __ary_retain_all(void *b, ht_array_t *a) {
+    int i = 0; for (i = a->start; i < a->size; i++) cl_retain(b, a->va_entries[i]);}
 
-Id cl_ary_clone(Id va_s) {
+Id cl_ary_clone(void *b, Id va_s) {
   ht_array_t *ary_s; CL_TYPED_VA_TO_PTR(ary_s, va_s, CL_TYPE_ARRAY, clNil);
   Id va_c; CL_ALLOC(va_c, CL_TYPE_ARRAY);
   char *p_c = VA_TO_PTR(va_c), *p_s = VA_TO_PTR(va_s);
   memcpy(p_c, p_s, CL_CELL_SIZE);
-  __ary_retain_all((ht_array_t *)p_c);
+  __ary_retain_all(b, (ht_array_t *)p_c);
   return va_c;
 }
 
-int cl_ary_free(Id va_ary) {
+int cl_ary_free(void *b, Id va_ary) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, 0);
   int i = 0;
-  for (i = ary->start; i < ary->size; i++) cl_release(ary->va_entries[i]);
-  cl_free(va_ary);
+  for (i = ary->start; i < ary->size; i++) cl_release(b, ary->va_entries[i]);
+  cl_free(b, va_ary);
   return 1;
 }
 
-Id cl_ary_new_join(Id a, Id b) {
+Id cl_ary_new_join(void *b, Id a, Id o) {
   ht_array_t *aa; CL_TYPED_VA_TO_PTR(aa, a, CL_TYPE_ARRAY, clNil);
-  ht_array_t *ab; CL_TYPED_VA_TO_PTR(ab, b, CL_TYPE_ARRAY, clNil);
+  ht_array_t *ab; CL_TYPED_VA_TO_PTR(ab, o, CL_TYPE_ARRAY, clNil);
   Id n; CL_ALLOC(n, CL_TYPE_ARRAY);
   ht_array_t *an; CL_TYPED_VA_TO_PTR(an, n, CL_TYPE_ARRAY, clNil);
   int aas = aa->size - aa->start;
@@ -680,11 +704,11 @@ Id cl_ary_new_join(Id a, Id b) {
   memcpy(&an->va_entries, &aa->va_entries + aa->start, aas * sizeof(Id));
   memcpy(&an->va_entries[aas + 1], &ab->va_entries + ab->start, 
       (ab->size - ab->start) * sizeof(Id));
-  __ary_retain_all(an);
+  __ary_retain_all(b, an);
   return n;
 }
 
-Id cl_ary_join_by_s(Id va_ary, Id va_js) {
+Id cl_ary_join_by_s(void *b, Id va_ary, Id va_js) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   CL_ACQUIRE_STR_D(djs, va_js, clNil);
   char rs[CL_CELL_SIZE];
@@ -699,59 +723,60 @@ Id cl_ary_join_by_s(Id va_ary, Id va_js) {
     memcpy(rs + ts, djs.s, djs.l);
     ts += djs.l;
   }
-  Id va_n = cl_string_new(rs, ts ? ts - djs.l : ts);
+  Id va_n = cl_string_new(b, rs, ts ? ts - djs.l : ts);
   return va_n;
 }
 
-Id cl_ary_map(Id va_ary, Id (*func_ptr)(Id)) {
+Id cl_ary_map(void *b, Id va_ary, Id (*func_ptr)(void *b, Id)) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   int i;
-  Id r = cl_ary_new();
-  for (i = ary->start; i < ary->size; i++) cl_ary_push(r, func_ptr(ary->va_entries[i]));
+  Id r = cl_ary_new(b);
+  for (i = ary->start; i < ary->size; i++) 
+      cl_ary_push(b, r, func_ptr(b, ary->va_entries[i]));
   return r;
 }
 
-int cl_ary_push(Id va_ary, Id va) {
+int cl_ary_push(void *b, Id va_ary, Id va) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, 0);
   CL_CHECK_ERROR((ary->size >= CL_ARY_MAX_ENTRIES), "array is full", 0);
   ary->size += 1;
-  ary->va_entries[ary->start + ary->size - 1] = cl_retain(va);
+  ary->va_entries[ary->start + ary->size - 1] = cl_retain(b, va);
   return 1;
 }
 
-Id cl_ary_unshift(Id va_ary) {
+Id cl_ary_unshift(void *b, Id va_ary) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   if (ary->size - ary->start <= 0) { return clNil; } 
   ary->start++;
-  return cl_release(ary->va_entries[ary->start - 1]);
+  return cl_release(b, ary->va_entries[ary->start - 1]);
 }
 
-int cl_ary_len(Id va_ary) {
+int cl_ary_len(void *b, Id va_ary) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, -1);
   return ary->size - ary->start;
 }
 
-Id cl_ary_index(Id va_ary, int i) {
+Id cl_ary_index(void *b, Id va_ary, int i) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   if (ary->size - ary->start <= i) { return clNil; } 
   return ary->va_entries[ary->start + i];
 }
 
-Id ca_i(Id va_ary, int i) { return cl_ary_index(va_ary, i); }
-Id ca_f(Id va_ary) { return ca_i(va_ary, 0); }
-Id ca_s(Id va_ary) { return ca_i(va_ary, 1); }
-Id ca_th(Id va_ary) { return ca_i(va_ary, 2); }
-Id ca_fth(Id va_ary) { return ca_i(va_ary, 3); }
+Id ca_i(void *b, Id va_ary, int i) { return cl_ary_index(b, va_ary, i); }
+#define ca_f(ary) ca_i(b, ary, 0)
+#define ca_s(ary) ca_i(b, ary, 1)
+#define ca_th(ary) ca_i(b, ary, 2)
+#define ca_fth(ary) ca_i(b, ary, 3)
 
-Id cl_ary_iterate(Id va_ary, int *i) {
+Id cl_ary_iterate(void *b, Id va_ary, int *i) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   if (*i >= ary->size - ary->start) { return clNil; }
-  return cl_ary_index(va_ary, (*i)++); 
+  return cl_ary_index(b, va_ary, (*i)++); 
 }
 
-int cl_ary_contains_only_type_i(Id a, int t) {
+int cl_ary_contains_only_type_i(void *b, Id a, int t) {
   int i = 0; Id va;
-  while ((va = cl_ary_iterate(a, &i)).s)
+  while ((va = cl_ary_iterate(b, a, &i)).s)
       if (!cl_is_type_i(va, t))  return 0;
   return 1;
 }
@@ -759,11 +784,11 @@ int cl_ary_contains_only_type_i(Id a, int t) {
 #define CL_PUSH_STRING { \
     int l = ds.s + i - last_start - match_pos; \
     if (l > 0) { \
-      Id va_ns = cl_string_new(last_start, l); VA_0_R(va_ns, clNil); \
-      if (!cl_ary_push(va_ary, va_ns)) return clNil; }}
+      Id va_ns = cl_string_new(b, last_start, l); VA_0_R(va_ns, clNil); \
+      if (!cl_ary_push(b, va_ary, va_ns)) return clNil; }}
 
-Id cl_string_split(Id va_s) {
-  Id va_ary = cl_ary_new();
+Id cl_string_split(void *b, Id va_s) {
+  Id va_ary = cl_ary_new(b);
   CL_ACQUIRE_STR_D(ds, va_s, clNil);
   if (ds.l == 0) return clNil;
   size_t i, match_pos = 0;
@@ -784,20 +809,41 @@ Id cl_string_split(Id va_s) {
   return va_ary;
 }
 
-Id cl_input(char *prompt) {
-  if (cl_interactive) printf("%s", prompt); 
+Id cl_input(void *b, FILE *f, int interactive, char *prompt) {
+  if (interactive) printf("%s", prompt); 
+  Id cs = S("(begin");
   size_t l; 
-  char *p = fgetln(fin, &l);
-  if (l > 0 && p[0] == ';') return clNil;
+  char *p;
+next_line:
+  p = fgetln(f, &l);
+  if (l > 0 && (p[0] == ';' || p[0] == '#')) {
+    if (interactive) return clNil;
+    else goto next_line;
+  }
   if (l > 0 && p[l - 1] == '\n') --l;
-  Id s = cl_string_new(p, l);
-  if (cl_verbose) printf("%s\n", cl_string_ptr(s));
+  Id s = cl_string_new(b, p, l);
+  if (!interactive) {
+    if (feof(f)) { 
+      cl_string_append(b, cs, S(")"));
+      return cs;
+    }
+    cl_string_append(b, cs, s);
+    goto next_line;
+  }
+  if (cl_verbose) printf("%s\n", cl_string_ptr(b, s));
   return s;
+}
+
+unsigned long cl_current_time_ms() {
+  struct timeval now; 
+  gettimeofday(&now, NULL); 
+  return now.tv_sec * 1000 + (now.tv_usec / 1000);
 }
 
 #include "scheme-parser.c"
 
 int main(int argc, char **argv) {
+  cl_setup();
   cl_interactive = isatty(0);
   if (argc > 1) { 
     if ((fin = fopen(argv[argc - 1], "r")) == NULL) {
@@ -805,8 +851,10 @@ int main(int argc, char **argv) {
     cl_interactive = 0;
     cl_verbose = argc > 2;
   } else { fin = stdin; }
-  cl_init();
-  cl_repl();
+  cl_heap = cl_init(cl_shm_create(), CL_HEAP_SIZE);
+  FILE* fb = fopen("boot.scm", "r");
+  cl_repl(cl_heap, fb, 0);
+  cl_repl(cl_heap, fin, cl_interactive);
   return 0;
 }
 
