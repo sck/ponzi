@@ -1,7 +1,7 @@
 
 Id cl_debug() { 
 }
-#define D(c, va) __d(__FUNCTION__, __LINE__, c, va);
+#define D(c, va) __d(b, __FUNCTION__, __LINE__, c, va);
 
 Id cl_to_string(void *b, Id exp);
 char *cl_string_ptr(void *b, Id va_s);

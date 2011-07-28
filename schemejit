@@ -1,0 +1,8 @@
+#! /bin/sh
+
+F=`basename $0`
+
+test "x$F" = "xperf" && export RL=1
+test "x$F" = "xschemejit" && test "x${1+"$@"}" = "x" && export RL=1
+
+rlwrap $0.bin ${1+"$@"}
