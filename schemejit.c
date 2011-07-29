@@ -15,6 +15,7 @@
 #include <sys/time.h>
 
 #define CL_VERSION "0.0.1"
+//#define CL_GC_DEBUG 
 
 typedef union {
   float f;
@@ -89,6 +90,7 @@ Id cl_handle_error_with_err_string_nh(const char *ctx,
 #define CL_MEM_SIZE (size_t)(CL_VAR_COUNT * CL_STATIC_ALLOC_SIZE)
 #define CL_PERF_MEM_SIZE (size_t)(200LL * CL_STATIC_ALLOC_SIZE)
 
+#ifdef CL_GC_DEBUG
 typedef struct {
   const char *where;
   int line;
@@ -108,6 +110,9 @@ void cl_register_var(Id va, const char *where, int line) {
   cl_var_status[adr].line = line;
   cl_var_status[adr].new = 1;
 }
+#else
+#define cl_register_var(va, where, line)
+#endif
 
 void *cl_private_memory_create() {
   void *base = 0;
@@ -238,7 +243,11 @@ int cl_var_free(void *b) {
     return (cl_md->total_size - cl_md->heap_size) / CL_STATIC_ALLOC_SIZE; }
   
 
+#ifdef CL_GC_DEBUG
 Id __cl_retain(const char *where, int line, void *b, Id from, Id va);
+#else
+Id __cl_retain(void *b, Id va);
+#endif
 #define CL_HEAP_SIZE \
     ((CL_MEM_SIZE / CL_STATIC_ALLOC_SIZE) * CL_STATIC_ALLOC_SIZE)
 int cl_init_memory(void *b, size_t size) {
@@ -252,11 +261,19 @@ int cl_init_memory(void *b, size_t size) {
 
     CL_ADR(cl_md->symbols) = 1;
     CL_TYPE(cl_md->symbols) = 6; //CL_TYPE_HASH; 
+#ifdef CL_GC_DEBUG
     __cl_retain(__FUNCTION__, __LINE__, b, clNil, cl_md->symbols);
+#else
+    __cl_retain(b, cl_md->symbols);
+#endif
 
     CL_ADR(cl_md->globals) = 2;
     CL_TYPE(cl_md->globals) = 6; // CL_TYPE_HASH; 
+#ifdef CL_GC_DEBUG
     __cl_retain(__FUNCTION__, __LINE__, b, clNil, cl_md->globals);
+#else
+    __cl_retain(b, cl_md->globals);
+#endif
 
     cl_md->magic = CL_DB_MAGIC;
     cl_md->version = CL_DB_VERSION;
@@ -406,7 +423,9 @@ int cl_ht_free(void *b, Id);
 #define cl_release(va) __cl_release(b, va)
 Id __cl_release(void *b, Id va) { 
   RCI; CL_CHECK_ERROR((*rc <= 1), "Reference counter is already 0!", clNil);
+#ifdef CL_GC_DEBUG
   cl_var_status[CL_ADR(va)].release_counter++;
+#endif
   --(*rc);
   return va;
 }
@@ -441,6 +460,7 @@ size_t __cl_mem_dump(void *b, int silent) {
       short int *t = (short int *) (p + sizeof(int));
       Id r;
       PTR_TO_VA(r, (char *)p + RCS);
+#ifdef CL_GC_DEBUG
       cl_var_status_t *s = &cl_var_status[CL_ADR(r)];
       if (!silent) {
         //printf("%s%x:%d%s ", cl_var_status[CL_ADR(r)].new ? "NEW" : "",
@@ -454,6 +474,7 @@ size_t __cl_mem_dump(void *b, int silent) {
         }
       }
       cl_var_status[CL_ADR(r)].new = 0;
+#endif
     }
   }
   //if (!silent) printf("active: %ld\n", active_entries);
@@ -464,10 +485,11 @@ size_t cl_mem_dump(void *b) { return __cl_mem_dump(b, 0); }
 size_t cl_active_entries(void *b) { return __cl_mem_dump(b, 1); }
 
 size_t cl_max(size_t a, size_t b) { return a > b ? a : b; }
+size_t cl_min(size_t a, size_t b) { return a < b ? a : b; }
 
 void cl_garbage_collect(void *b) {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
-  if ((rand() & 31) != 0) entries = cl_max(entries, 10);
+  if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
   size_t mem_start = cl_md->total_size + cl_header_size() - 
       cl_md->heap_size;
   char *p = mem_start + b;
@@ -487,14 +509,23 @@ void cl_garbage_collect(void *b) {
   //printf("\n");
 }
 
+#ifdef CL_GC_DEBUG
 #define cl_retain(from, va) __cl_retain(__FUNCTION__, __LINE__, b, from, va)
 #define cl_retain2(from, va) __cl_retain(where, line, b, from, va)
 Id __cl_retain(const char *where, int line, void *b, Id va_from, Id va) { 
+#else
+#define cl_retain(from, va) __cl_retain(b, va)
+#define cl_retain2(from, va) __cl_retain(b, va)
+Id __cl_retain(void *b, Id va) { 
+#endif
+
   RCI;
+#ifdef CL_GC_DEBUG
   cl_var_status[CL_ADR(va)].retain_where = where;
   cl_var_status[CL_ADR(va)].retain_line = line;
   cl_var_status[CL_ADR(va)].retain_adr = CL_ADR(va_from);
   cl_var_status[CL_ADR(va)].retain_counter++;
+#endif
   (*rc)++; return va; }
 
 /*
@@ -523,7 +554,6 @@ Id cl_string_new(void *b, char *source, cl_string_size_t l) {
 Id cl_string_new_c(void *b, char *source) { 
     return cl_string_new(b, source, strlen(source)); }
 #include "debug.c"
-
 
 Id cl_string_new_number(void *b, Id n) { 
   Id va; CL_ALLOC(va, CL_TYPE_STRING);
@@ -675,10 +705,6 @@ Id cl_ht_new(void *b) {
 size_t cl_ht_hash(void *b, Id va_s) {
     return cl_hash_var(b, va_s) % CL_HT_BUCKETS; }
 
-int cl_ht_hash_destroy(Id ht) { 
-  return 1;
-}
-
 cl_ht_entry_t cl_ht_null_node = { 0, 0, 0 };
 
 #define CL_HT_ITER_BEGIN(r) \
@@ -810,8 +836,6 @@ Id cl_env_find_and_set(void *b, Id va_ht, Id va_key, Id va_value) {
   else { return cl_ht_set(b, va0, va_key, va_value); }
 }
 
-//Id cl_global_env;
-
 void cl_add_globals(void *b, Id env);
 
 void cl_setup() {
@@ -824,7 +848,9 @@ char *cmd;
 char *cl_cmd_display() { return cl_perf_mode ? "perf" : "schemejit"; }
 
 void *cl_init(void *b, size_t size) {
+#ifdef CL_GC_DEBUG
   memset(&cl_var_status, 0, sizeof(cl_var_status));
+#endif
   if (!b) return 0;
   int r = cl_init_memory(b, size);
   if (r == 2) return 0;
@@ -852,8 +878,6 @@ Id cl_define_func(void *b, char *name, Id (*p)(void *b, Id), Id env) {
 Id cl_call(void *b, Id va_f, Id x) { 
   cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR(cf, va_f, CL_TYPE_CFUNC, clNil);
   Id r = cf->func_ptr(b, x);
-  //cl_garbage_collect(b);
-  //cl_mem_dump(b);
   return r;
 }
 
@@ -950,12 +974,22 @@ Id cl_ary_map(void *b, Id va_ary, Id (*func_ptr)(void *b, Id)) {
   return r;
 }
 
-
 Id cl_ary_unshift(void *b, Id va_ary) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
   if (ary->size - ary->start <= 0) { return clNil; } 
   ary->start++;
   return cl_release(ary->va_entries[ary->start - 1]);
+}
+
+Id cl_ary_set(void *b, Id va_ary, int i, Id va) {
+  ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
+  CL_CHECK_ERROR((ary->start + i >= CL_ARY_MAX_ENTRIES), 
+      "array index too large", clNil);
+  if (i - ary->start > ary->size) ary->size = i - ary->start;
+  Id va_o = ary->va_entries[ary->start + i];
+  if (va_o.s) cl_release(va_o);
+  ary->va_entries[ary->start + i] = va;
+  return va;
 }
 
 Id cl_ary_pop(void *b, Id va_ary) {

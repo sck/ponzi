@@ -308,6 +308,6 @@ void cl_repl(void *b, FILE *f, int interactive) {
     if (feof(f)) return;
     if (interactive) printf("-> %s\n", cl_string_ptr(b, cl_to_inspect(b, val)));
     cl_garbage_collect(b);
-    cl_mem_dump(b);
+    //cl_mem_dump(b);
   }
 }
