@@ -105,7 +105,7 @@ void cl_perf_show() {
 Id cl_eval(void *b, Id x, Id env, Id this, int last) {
   //cl_perf_count(this);
 tail_rc_start:
-  cl_retain(env);
+  cl_retain(clNil, env);
   cl_garbage_collect(b);
   Id x0, exp, val= clNil, var, vars = clNil, rv = clNil;
   //printf("START: %x %lx\n", CL_ADR(vars), &vars);
@@ -142,7 +142,7 @@ tail_rc_start:
     RETURN(val);
   } else {  // (proc exp*)
     Id v;
-    vars = cl_retain(cl_ary_new(b));
+    vars = cl_retain(clNil, cl_ary_new(b));
     //printf("NEW: %x %lx\n", CL_ADR(vars), &vars);
     int i = 1;
     while ((v = cl_ary_iterate(b, x, &i)).s) 
@@ -301,13 +301,13 @@ Id cl_to_string(void *b, Id exp) {
 
 void cl_repl(void *b, FILE *f, int interactive) {
   while (1) {
-    Id parsed = cl_retain(cl_parse(b, 
+    Id parsed = cl_retain(clNil, cl_parse(b, 
         cl_input(b, f, interactive, cl_perf_mode ? "perf>" :  "schemejit> ")));
     Id val = cl_eval(b, parsed, cl_globals, clNil, 1);
     cl_release(parsed);
     if (feof(f)) return;
     if (interactive) printf("-> %s\n", cl_string_ptr(b, cl_to_inspect(b, val)));
     cl_garbage_collect(b);
-    //cl_mem_dump(b);
+    cl_mem_dump(b);
   }
 }

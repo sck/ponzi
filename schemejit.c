@@ -95,6 +95,7 @@ typedef struct {
   int new;
   const char *retain_where;
   int retain_line;
+  int retain_adr;
   size_t release_counter;
   size_t retain_counter;
 } cl_var_status_t;
@@ -237,7 +238,7 @@ int cl_var_free(void *b) {
     return (cl_md->total_size - cl_md->heap_size) / CL_STATIC_ALLOC_SIZE; }
   
 
-Id __cl_retain(const char *where, int line, void *b, Id va);
+Id __cl_retain(const char *where, int line, void *b, Id from, Id va);
 #define CL_HEAP_SIZE \
     ((CL_MEM_SIZE / CL_STATIC_ALLOC_SIZE) * CL_STATIC_ALLOC_SIZE)
 int cl_init_memory(void *b, size_t size) {
@@ -251,11 +252,11 @@ int cl_init_memory(void *b, size_t size) {
 
     CL_ADR(cl_md->symbols) = 1;
     CL_TYPE(cl_md->symbols) = 6; //CL_TYPE_HASH; 
-    __cl_retain(__FUNCTION__, __LINE__, b, cl_md->symbols);
+    __cl_retain(__FUNCTION__, __LINE__, b, clNil, cl_md->symbols);
 
     CL_ADR(cl_md->globals) = 2;
     CL_TYPE(cl_md->globals) = 6; // CL_TYPE_HASH; 
-    __cl_retain(__FUNCTION__, __LINE__, b, cl_md->globals);
+    __cl_retain(__FUNCTION__, __LINE__, b, clNil, cl_md->globals);
 
     cl_md->magic = CL_DB_MAGIC;
     cl_md->version = CL_DB_VERSION;
@@ -445,9 +446,11 @@ size_t __cl_mem_dump(void *b, int silent) {
         //printf("%s%x:%d%s ", cl_var_status[CL_ADR(r)].new ? "NEW" : "",
         //CL_ADR(r), *rc, cl_type_to_i_cp(*t));
         if (s->new) {
-          printf("NEW: %x %d %s:%d %s retain from %s:%d %ld:%ld\n", CL_ADR(r), 
+          printf("NEW: %x %d %s:%d %s retain from %s:%d %x %ld:%ld\n", 
+              CL_ADR(r), 
               *rc, s->where, s->line, cl_type_to_cp(*t), s->retain_where,
-              s->retain_line, s->retain_counter, s->release_counter);
+              s->retain_line, s->retain_adr, s->retain_counter, 
+              s->release_counter);
         }
       }
       cl_var_status[CL_ADR(r)].new = 0;
@@ -484,12 +487,13 @@ void cl_garbage_collect(void *b) {
   //printf("\n");
 }
 
-#define cl_retain(va) __cl_retain(__FUNCTION__, __LINE__, b, va)
-#define cl_retain2(va) __cl_retain(where, line, b, va)
-Id __cl_retain(const char *where, int line, void *b, Id va) { 
+#define cl_retain(from, va) __cl_retain(__FUNCTION__, __LINE__, b, from, va)
+#define cl_retain2(from, va) __cl_retain(where, line, b, from, va)
+Id __cl_retain(const char *where, int line, void *b, Id va_from, Id va) { 
   RCI;
   cl_var_status[CL_ADR(va)].retain_where = where;
   cl_var_status[CL_ADR(va)].retain_line = line;
+  cl_var_status[CL_ADR(va)].retain_adr = CL_ADR(va_from);
   cl_var_status[CL_ADR(va)].retain_counter++;
   (*rc)++; return va; }
 
@@ -744,12 +748,14 @@ Id __cl_ht_set(const char *where, int line, void *b, Id va_ht, Id va_key,
     v = cl_ht_hash(b, va_key);
     CL_ALLOC(va_hr, CL_TYPE_HASH_PAIR);
     cl_register_var(va_hr, where, line);
-    cl_retain(va_hr); hr = VA_TO_PTR(va_hr); P_0_R(hr, clNil);
-    hr->va_key = cl_retain(va_key);
+    cl_retain2(va_ht, va_hr); hr = VA_TO_PTR(va_hr); P_0_R(hr, clNil);
+    hr->va_key = cl_retain2(va_hr, va_key);
     ht->size += 1;
-  } 
+  } else {
+    cl_release(hr->va_value);
+  }
 
-  hr->va_value = cl_retain2(va_value);
+  hr->va_value = cl_retain2(va_hr, va_value);
   if (new_entry) {
     hr->va_next = ht->va_buckets[v];
     ht->va_buckets[v] = va_hr;
@@ -869,15 +875,17 @@ Id __cl_ary_new(const char *where, int line, void *b) {
   cl_zero(b, va_ary); return va_ary; 
 }
 
-void __ary_retain_all(void *b, ht_array_t *a) {
-    int i = 0; for (i = a->start; i < a->size; i++) cl_retain(a->va_entries[i]);}
+void __ary_retain_all(void *b, Id from, ht_array_t *a) {
+  int i = 0; 
+  for (i = a->start; i < a->size; i++) cl_retain(from, a->va_entries[i]);
+}
 
 Id cl_ary_clone(void *b, Id va_s) {
   ht_array_t *ary_s; CL_TYPED_VA_TO_PTR(ary_s, va_s, CL_TYPE_ARRAY, clNil);
   Id va_c; CL_ALLOC(va_c, CL_TYPE_ARRAY);
   char *p_c = VA_TO_PTR(va_c), *p_s = VA_TO_PTR(va_s);
   memcpy(p_c, p_s, CL_CELL_SIZE);
-  __ary_retain_all(b, (ht_array_t *)p_c);
+  __ary_retain_all(b, va_c, (ht_array_t *)p_c);
   return va_c;
 }
 
@@ -900,7 +908,7 @@ Id cl_ary_new_join(void *b, Id a, Id o) {
   memcpy(&an->va_entries, &aa->va_entries + aa->start, aas * sizeof(Id));
   memcpy(&an->va_entries[aas + 1], &ab->va_entries + ab->start, 
       (ab->size - ab->start) * sizeof(Id));
-  __ary_retain_all(b, an);
+  __ary_retain_all(b, n, an);
   return n;
 }
 
@@ -929,7 +937,7 @@ int __cl_ary_push(const char *where, int line, void *b, Id va_ary, Id va) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, 0);
   CL_CHECK_ERROR((ary->size >= CL_ARY_MAX_ENTRIES), "array is full", 0);
   ary->size += 1;
-  ary->va_entries[ary->start + ary->size - 1] = cl_retain2(va);
+  ary->va_entries[ary->start + ary->size - 1] = cl_retain2(va_ary, va);
   return 1;
 }
 
@@ -1073,7 +1081,7 @@ int main(int argc, char **argv) {
   if (!scm_filename) scm_filename = "cli.scm";
   Id fn = cl_string_append(b, S(scm_filename), S(".perf"));
   cl_perf_mc = cl_shared_memory_create(cl_string_ptr(b, 
-      cl_retain(fn)), CL_PERF_MEM_SIZE);
+      cl_retain(clNil, fn)), CL_PERF_MEM_SIZE);
   if (cl_perf_mc) { cl_perf = cl_perf_mc->base;  }
   else { printf("failed to create perf segment!\n"); exit(1); }
   int r = cl_init_memory(cl_perf, CL_PERF_MEM_SIZE);
