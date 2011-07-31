@@ -17,7 +17,7 @@
 #include "atomic.c"
 
 #define CL_VERSION "0.0.1"
-//#define CL_GC_DEBUG 
+#define CL_GC_DEBUG 
 
 typedef union {
   float f;
@@ -493,7 +493,7 @@ size_t cl_min(size_t a, size_t b) { return a < b ? a : b; }
 
 void cl_garbage_collect(void *b) {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
-  //if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
+  if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
   size_t mem_start = cl_md->total_size + cl_header_size() - 
       cl_md->heap_size;
   char *p = mem_start + b;

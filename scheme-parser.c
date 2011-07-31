@@ -128,7 +128,8 @@ void cl_perf_show() {
 size_t nested_depth = 0;
 size_t stack_overflow = 0;
 size_t rc_count = 0;
-Id cl_eval(void *b, Id x, Id env, Id this, Id previous, int last) {
+Id cl_eval(void *b, Id x, Id _env, Id this, Id previous, int last) {
+  Id x0, exp, val, var, vars, rv, env;
   //cl_perf_count(this);
   nested_depth++;
   if (stack_overflow) return clNil;
@@ -136,20 +137,19 @@ Id cl_eval(void *b, Id x, Id env, Id this, Id previous, int last) {
     printf("STACKoverflow\n");
     stack_overflow = 1;
   }
-  cl_retain(clNil, env);
+  cl_retain(clNil, _env);
   cl_garbage_collect(b);
   Id func_name = clNil;
 tail_rc_start:
-  {}
-  Id x0, exp, val= clNil, var, vars = clNil, rv = clNil;
+  val= clNil; vars = clNil; rv = clNil;
   if (!x.s) RETURN(clNil);
   //printf("START: %x %lx\n", CL_ADR(vars), &vars);
-  env = (env.s ? env : cl_globals);
+  env = (_env.s ? _env : cl_globals);
   if (CL_TYPE(x) == CL_TYPE_SYMBOL) {
     if (cl_string_starts_with(b, x, S(":"))) {
       RETURN(cl_intern(cl_string_sub_str_new(b, x, 1, -1)));
     }
-    if (cl_equals_i(x, S_globals)) return cl_globals;
+    if (cl_equals_i(x, S_globals)) RETURN(cl_globals);
     RETURN(cl_env_find(b, env, x));
   } else if (CL_TYPE(x) != CL_TYPE_ARRAY) {
     RETURN(x); // constant literal
@@ -163,13 +163,13 @@ tail_rc_start:
     Id t = cl_eval2(test, env);
     Id rrr = cnil2(t).s ? cl_eval2(conseq, env) : cl_eval2(alt, env);
     //printf("IF END\n");
-    return rrr;
+    RETURN(rrr);
   } else if (cl_equals_i(x0, S_set)) { // (set! var exp)
     var = ca_s(x), exp = ca_th(x);
     cl_env_find_and_set(b, env, var, cl_eval2(exp, env));
   } else if (cl_equals_i(x0, S_define)) { // (define var exp)
     var = ca_s(x), exp = ca_th(x);
-    return cl_ht_set(b, env, var, cl_eval2(exp, env));
+    RETURN(cl_ht_set(b, env, var, cl_eval2(exp, env)));
   } else if (cl_equals_i(x0, S_lambda)) { //(lambda (var*) exp)
     Id l = cl_ary_new(b); cl_ary_set_lambda(b, l);
     cl_ary_push(b, l, ca_s(x)); cl_ary_push(b, l, ca_th(x));
@@ -249,7 +249,7 @@ finish:
     //if (rc_count++ < 5) goto tail_rc_start;
     goto tail_rc_start;
   }
-  cl_release(env);
+  cl_release(_env);
   nested_depth--;
   return rv;
 }
@@ -436,6 +436,6 @@ void cl_repl(void *b, FILE *f, int interactive) {
     if (feof(f)) return;
     if (interactive) printf("=> %s\n", cl_string_ptr(cl_to_inspect(b, val)));
     cl_garbage_collect(b);
-    //cl_mem_dump(b);
+    cl_mem_dump(b);
   }
 }
