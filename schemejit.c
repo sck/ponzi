@@ -187,6 +187,7 @@ open_failed:
 #define CL_TYPE_BOOL 0
 #define CL_TYPE_FLOAT 1
 #define CL_TYPE_INT 2
+#define CL_TYPE_SPECIAL 3
 
 #define cl_string_size_t short int
 
@@ -245,6 +246,14 @@ int cl_var_free(void *b) {
     return (cl_md->total_size - cl_md->heap_size) / CL_STATIC_ALLOC_SIZE; }
   
 
+#define CL_TYPE_STRING 4
+#define CL_TYPE_SYMBOL 5
+#define CL_TYPE_CFUNC 6
+#define CL_TYPE_HASH 7
+#define CL_TYPE_HASH_PAIR 8
+#define CL_TYPE_ARRAY 9
+#define CL_TYPE_MAX 9
+
 #ifdef CL_GC_DEBUG
 Id __cl_retain(const char *where, int line, void *b, Id from, Id va);
 #else
@@ -262,7 +271,7 @@ int cl_init_memory(void *b, size_t size) {
     c->size = s;
 
     CL_ADR(cl_md->symbols) = 1;
-    CL_TYPE(cl_md->symbols) = 6; //CL_TYPE_HASH; 
+    CL_TYPE(cl_md->symbols) = CL_TYPE_HASH; 
 #ifdef CL_GC_DEBUG
     __cl_retain(__FUNCTION__, __LINE__, b, clNil, cl_md->symbols);
 #else
@@ -270,7 +279,7 @@ int cl_init_memory(void *b, size_t size) {
 #endif
 
     CL_ADR(cl_md->globals) = 2;
-    CL_TYPE(cl_md->globals) = 6; // CL_TYPE_HASH; 
+    CL_TYPE(cl_md->globals) = CL_TYPE_HASH; 
 #ifdef CL_GC_DEBUG
     __cl_retain(__FUNCTION__, __LINE__, b, clNil, cl_md->globals);
 #else
@@ -364,13 +373,6 @@ Id cn(Id v) { return CL_TYPE(v) == CL_TYPE_BOOL ? cl_int(v.s ? 1 : 0) : v; }
  * Basic types 
  */
 
-#define CL_TYPE_STRING 3
-#define CL_TYPE_SYMBOL 4
-#define CL_TYPE_CFUNC 5
-#define CL_TYPE_HASH 6
-#define CL_TYPE_HASH_PAIR 7
-#define CL_TYPE_ARRAY 8
-#define CL_TYPE_MAX 8
 
 char *cl_types_s[] = {"nil", "float", "int", "string", "symbol", "cfunc", "hash", 
     "hash pair", "array"};
@@ -491,7 +493,7 @@ size_t cl_min(size_t a, size_t b) { return a < b ? a : b; }
 
 void cl_garbage_collect(void *b) {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
-  //if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
+  if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
   size_t mem_start = cl_md->total_size + cl_header_size() - 
       cl_md->heap_size;
   char *p = mem_start + b;
@@ -555,6 +557,9 @@ Id cl_string_new(void *b, char *source, cl_string_size_t l) {
 
 Id cl_string_new_c(void *b, char *source) { 
     return cl_string_new(b, source, strlen(source)); }
+#define cl_string_ptr(s) __cl_string_ptr(__FUNCTION__, __LINE__, b, s)
+char *__cl_string_ptr(const char *w, int l, void *b, Id va_s);
+
 #include "debug.c"
 
 Id __cl_snn(void *b, Id n, const char *f) { 
@@ -573,7 +578,7 @@ typedef struct { char *s; cl_string_size_t l; } cl_str_d;
 int sr = 0;
 #define CL_ACQUIRE_STR_D(n,va,r) \
   cl_str_d n; sr = cl_acquire_string_data(b, va, &n); P_0_R(sr, r);
-#define CL_ACQUIRE_STR_D2(w,l, n,va,r) \
+#define CL_ACQUIRE_STR_D2(n,va,r) \
   cl_str_d n; sr = cl_acquire_string_data(b, va, &n); P_0_R2(w, l, sr, r);
 
 Id cl_string_sub_str_new(void *b, Id s, int start, int _count) {
@@ -595,9 +600,9 @@ int cl_acquire_string_data(void *b, Id va_s, cl_str_d *d) {
   return 1;
 }
 
-#define cl_string_ptr(s) __cl_string_ptr(b, s)
-char *__cl_string_ptr(void *b, Id va_s) { 
-    CL_ACQUIRE_STR_D(ds, va_s, 0x0); return ds.s; }
+char *__cl_string_ptr(const char *w, int l, void *b, Id va_s) { 
+    if (cnil(va_s)) return 0;
+    CL_ACQUIRE_STR_D2(ds, va_s, 0x0); return ds.s; }
 
 Id cl_string_append(void *b, Id va_d, Id va_s) {
   CL_ACQUIRE_STR_D(dd, va_d, clNil); CL_ACQUIRE_STR_D(ds, va_s, clNil);
@@ -620,9 +625,9 @@ int cl_string_hash(void *b, Id va_s, size_t *hash) {
 }
 
 #define cl_string_equals_cp_i(s, sb)  \
-    __cl_string_equals_cp_i(b, __FUNCTION__, __LINE__, s, sb)
-int __cl_string_equals_cp_i(void *b, const char *w, int l, Id va_s, char *sb) {
-  CL_ACQUIRE_STR_D2(w, l, ds, va_s, 0); 
+    __cl_string_equals_cp_i(__FUNCTION__, __LINE__, b, s, sb)
+int __cl_string_equals_cp_i(const char *w, int l, void *b, Id va_s, char *sb) {
+  CL_ACQUIRE_STR_D2(ds, va_s, 0); 
   size_t bl = strlen(sb);
   if (ds.l != bl) { return 0; }
   cl_string_size_t i;
@@ -780,11 +785,12 @@ Id cl_ht_map(void *b, Id va_ht, Id (*func_ptr)(void *b, Id)) {
   Id r = cl_ary_new(b);
   for (k = 0; k < CL_HT_BUCKETS; k++) {
     for (va_hr = ht->va_buckets[k]; va_hr.s != 0 && hr != NULL; va_hr = hr->va_next) {
-      Id p = cl_ary_new(b);
+      Id s = cl_string_new_0(b);
       CL_TYPED_VA_TO_PTR(hr, va_hr, CL_TYPE_HASH_PAIR, clNil); 
-      cl_ary_push(b, p, func_ptr(b, hr->va_key));
-      cl_ary_push(b, p, func_ptr(b, hr->va_value));
-      cl_ary_push(b, r, p);
+      cl_string_append(b, s, func_ptr(b, hr->va_key));
+      cl_string_append(b, s, S(" => "));
+      cl_string_append(b, s, func_ptr(b, hr->va_value));
+      cl_ary_push(b, r, s);
     }
   }
   return r;
@@ -888,8 +894,9 @@ Id cl_env_find_and_set(void *b, Id va_ht, Id va_key, Id va_value) {
 void cl_add_globals(void *b, Id env);
 
 void cl_setup() {
-  clTrue.t.d.i = 1;
-  clTail.t.d.i = 2;
+  clTrue.s = 1;
+  CL_TYPE(clTail) = CL_TYPE_SPECIAL;
+  CL_INT(clTail)  = 1;
 }
 
 char *cmd;
