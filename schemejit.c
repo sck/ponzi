@@ -14,6 +14,8 @@
 #include <time.h>
 #include <sys/time.h>
 
+#include "atomic.c"
+
 #define CL_VERSION "0.0.1"
 //#define CL_GC_DEBUG 
 
@@ -489,7 +491,7 @@ size_t cl_min(size_t a, size_t b) { return a < b ? a : b; }
 
 void cl_garbage_collect(void *b) {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
-  if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
+  //if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
   size_t mem_start = cl_md->total_size + cl_header_size() - 
       cl_md->heap_size;
   char *p = mem_start + b;
@@ -555,14 +557,17 @@ Id cl_string_new_c(void *b, char *source) {
     return cl_string_new(b, source, strlen(source)); }
 #include "debug.c"
 
-Id cl_string_new_number(void *b, Id n) { 
+Id __cl_snn(void *b, Id n, const char *f) { 
   Id va; CL_ALLOC(va, CL_TYPE_STRING);
   int i = CL_TYPE(n) == CL_TYPE_INT;
   char ns[1024]; 
-  i ? snprintf(ns, 1023, "%d", CL_INT(n)) : 
+  i ? snprintf(ns, 1023, f, CL_INT(n)) : 
       snprintf(ns, 1023, "%f", CL_FLOAT(n));
   return S(ns);
 }
+
+Id cl_string_new_number(void *b, Id n) { return __cl_snn(b, n, "%d"); }
+Id cl_string_new_hex_number(void *b, Id n) { return __cl_snn(b, n, "0x%x"); }
 
 typedef struct { char *s; cl_string_size_t l; } cl_str_d;
 int sr = 0;
@@ -574,7 +579,7 @@ int sr = 0;
 Id cl_string_sub_str_new(void *b, Id s, int start, int _count) {
   CL_ACQUIRE_STR_D(dt, s, clNil);
   if (start > dt.l) start = dt.l;
-  int count = (_count < 0) ? (dt.l + _count) - start : _count;
+  int count = (_count < 0) ? (dt.l + _count + 1) - start : _count;
   if (count < 0) count = 0;
   if (count > dt.l - start) count = dt.l - start;
   char sym[dt.l + 1];
@@ -590,7 +595,8 @@ int cl_acquire_string_data(void *b, Id va_s, cl_str_d *d) {
   return 1;
 }
 
-char *cl_string_ptr(void *b, Id va_s) { 
+#define cl_string_ptr(s) __cl_string_ptr(b, s)
+char *__cl_string_ptr(void *b, Id va_s) { 
     CL_ACQUIRE_STR_D(ds, va_s, 0x0); return ds.s; }
 
 Id cl_string_append(void *b, Id va_d, Id va_s) {
@@ -626,6 +632,12 @@ int __cl_string_equals_cp_i(void *b, const char *w, int l, Id va_s, char *sb) {
 
 void __cp(char **d, char **s, size_t l, int is) {
     memcpy(*d, *s, l); (*d) += l; if (is) (*s) += l; }
+
+int cl_string_starts_with(void *b, Id va_s, Id va_q) {
+  CL_ACQUIRE_STR_D(ds, va_s, 0); CL_ACQUIRE_STR_D(dq, va_q, 0); 
+  if (dq.l > ds.l) return 0;
+  return strncmp(ds.s, dq.s, dq.l) == 0;
+}
 
 Id cl_string_replace(void *b, Id va_s, Id va_a, Id va_b) {
   CL_ACQUIRE_STR_D(ds, va_s, clNil); CL_ACQUIRE_STR_D(da, va_a, clNil); 
@@ -756,6 +768,28 @@ int cl_ht_free(void *b, Id va_ht) {
   return 1;
 }
 
+#define cl_ary_new(b) __cl_ary_new(__FUNCTION__, __LINE__, b)
+Id __cl_ary_new(const char *where, int line, void *b);
+#define cl_ary_push(b, var_ary, va) \
+  __cl_ary_push(__FUNCTION__, __LINE__, b, var_ary, va)
+Id __cl_ary_push(const char *where, int line, void *b, Id va_ary, Id va);
+
+Id cl_ht_map(void *b, Id va_ht, Id (*func_ptr)(void *b, Id)) {
+  int k; Id va_hr; cl_ht_entry_t *hr = &cl_ht_null_node; 
+  cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va_ht, CL_TYPE_HASH, clNil); 
+  Id r = cl_ary_new(b);
+  for (k = 0; k < CL_HT_BUCKETS; k++) {
+    for (va_hr = ht->va_buckets[k]; va_hr.s != 0 && hr != NULL; va_hr = hr->va_next) {
+      Id p = cl_ary_new(b);
+      CL_TYPED_VA_TO_PTR(hr, va_hr, CL_TYPE_HASH_PAIR, clNil); 
+      cl_ary_push(b, p, func_ptr(b, hr->va_key));
+      cl_ary_push(b, p, func_ptr(b, hr->va_value));
+      cl_ary_push(b, r, p);
+    }
+  }
+  return r;
+}
+
 Id cl_ht_get(void *b, Id va_ht, Id va_key) { 
   cl_ht_entry_t *hr; cl_ht_lookup(b, &hr, va_ht, va_key);  P_0_R(hr, clNil);
   return hr->va_value;
@@ -765,6 +799,7 @@ Id cl_ht_get(void *b, Id va_ht, Id va_key) {
   __cl_ht_set(__FUNCTION__, __LINE__, b, va_ht, va_key, va_value)
 Id __cl_ht_set(const char *where, int line, void *b, Id va_ht, Id va_key, 
     Id va_value) {
+//set_new_entry_failed:
   cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va_ht, CL_TYPE_HASH, clNil);
   cl_ht_entry_t *hr; cl_ht_lookup(b, &hr, va_ht, va_key);
   size_t v;
@@ -775,15 +810,29 @@ Id __cl_ht_set(const char *where, int line, void *b, Id va_ht, Id va_key,
     CL_ALLOC(va_hr, CL_TYPE_HASH_PAIR);
     cl_register_var(va_hr, where, line);
     cl_retain2(va_ht, va_hr); hr = VA_TO_PTR(va_hr); P_0_R(hr, clNil);
+    // cl_atomic_cas
+    // if it fails: go back where?
+    //   -> before new entry: set_new_entry_failed
+    //   -> release key!
     hr->va_key = cl_retain2(va_hr, va_key);
+    // XXX cl_atomic_inc
     ht->size += 1;
   } else {
+    // XXX we may release multiple times with CAS...
+    // value_released = 1
     cl_release(hr->va_value);
   }
 
+  // XXX cl_atomic_cas!
+  // if it fails: retain is not valid anymore...
+  //  better retain before going here..
   hr->va_value = cl_retain2(va_hr, va_value);
+
   if (new_entry) {
+    // XXX cl_atomic_cas!
     hr->va_next = ht->va_buckets[v];
+    // XXX cl_atomic_cas!
+    // what if this fails and the previous succeeds?
     ht->va_buckets[v] = va_hr;
   }
   return va_value;
@@ -889,10 +938,10 @@ Id cl_call(void *b, Id va_f, Id x) {
 typedef struct {
   int size;
   int start; 
+  int lambda;
   Id va_entries[CL_ARY_MAX_ENTRIES];
 } ht_array_t;
 
-#define cl_ary_new(b) __cl_ary_new(__FUNCTION__, __LINE__, b)
 Id __cl_ary_new(const char *where, int line, void *b) {
   Id va_ary; CL_ALLOC(va_ary, CL_TYPE_ARRAY); 
   cl_register_var(va_ary, where, line);
@@ -955,15 +1004,25 @@ Id cl_ary_join_by_s(void *b, Id va_ary, Id va_js) {
   return va_n;
 }
 
-#define cl_ary_push(b, var_ary, va) \
-  __cl_ary_push(__FUNCTION__, __LINE__, b, var_ary, va)
-int __cl_ary_push(const char *where, int line, void *b, Id va_ary, Id va) {
-  ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, 0);
-  CL_CHECK_ERROR((ary->size >= CL_ARY_MAX_ENTRIES), "array is full", 0);
+Id __cl_ary_push(const char *where, int line, void *b, Id va_ary, Id va) {
+  ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
+  CL_CHECK_ERROR((ary->size >= CL_ARY_MAX_ENTRIES), "array is full", clNil);
   ary->size += 1;
   ary->va_entries[ary->start + ary->size - 1] = cl_retain2(va_ary, va);
+  return va_ary;
+}
+
+int cl_ary_set_lambda(void *b, Id va_ary) {
+  ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, 0);
+  ary->lambda = 1;
   return 1;
 }
+
+int cl_ary_is_lambda(void *b, Id va_ary) {
+  ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, 0);
+  return ary->lambda;
+}
+
 
 Id cl_ary_map(void *b, Id va_ary, Id (*func_ptr)(void *b, Id)) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
@@ -988,6 +1047,7 @@ Id cl_ary_set(void *b, Id va_ary, int i, Id va) {
   if (i - ary->start > ary->size) ary->size = i - ary->start;
   Id va_o = ary->va_entries[ary->start + i];
   if (va_o.s) cl_release(va_o);
+  // XXX cl_atomic_cas
   ary->va_entries[ary->start + i] = va;
   return va;
 }
@@ -1033,7 +1093,7 @@ int cl_ary_contains_only_type_i(void *b, Id a, int t) {
     int l = ds.s + i - last_start - match_pos; \
     if (l > 0) { \
       Id va_ns = cl_string_new(b, last_start, l); VA_0_R(va_ns, clNil); \
-      if (!cl_ary_push(b, va_ary, va_ns)) return clNil; }}
+      if (!cl_ary_push(b, va_ary, va_ns).s) return clNil; }}
 
 Id cl_string_split(void *b, Id va_s, char sep) {
   Id va_ary = cl_ary_new(b);
@@ -1057,6 +1117,12 @@ Id cl_string_split(void *b, Id va_s, char sep) {
   return va_ary;
 }
 
+Id cl_string_split2(void *b, Id va_s, Id sep) {
+  CL_ACQUIRE_STR_D(ds, sep, clNil);
+  if (ds.l == 0) return clNil;
+  return cl_string_split(b, va_s, ds.s[0]);
+}
+
 Id cl_input(void *b, FILE *f, int interactive, char *prompt) {
   if (interactive) printf("%ld:%s", cl_active_entries(b), prompt); 
   Id cs = S("(begin");
@@ -1078,7 +1144,7 @@ next_line:
     cl_string_append(b, cs, s);
     goto next_line;
   }
-  if (cl_verbose) printf("%s\n", cl_string_ptr(b, s));
+  //if (cl_verbose) printf("%s\n", cl_string_ptr(s));
   return s;
 }
 
@@ -1089,6 +1155,21 @@ unsigned long cl_current_time_ms() {
 }
 
 #include "scheme-parser.c"
+
+void test_atomic() {
+  size_t s = 1;
+  size_t n;
+  size_t o, rr;
+  rr = cl_atomic_cas(&s, 2, 1);
+  printf("s: %ld r %ld\n", s, rr);
+  rr = cl_atomic_add(&s, 10);
+  printf("s: %ld r %ld\n", s, rr);
+  rr = cl_atomic_inc(&s);
+  printf("s: %ld r %ld\n", s, rr);
+
+  exit(0);
+}
+
 
 int main(int argc, char **argv) {
   cl_setup();
@@ -1114,7 +1195,7 @@ int main(int argc, char **argv) {
   void *b = cl_heap;
   if (!scm_filename) scm_filename = "cli.scm";
   Id fn = cl_string_append(b, S(scm_filename), S(".perf"));
-  cl_perf_mc = cl_shared_memory_create(cl_string_ptr(b, 
+  cl_perf_mc = cl_shared_memory_create(cl_string_ptr(
       cl_retain(clNil, fn)), CL_PERF_MEM_SIZE);
   if (cl_perf_mc) { cl_perf = cl_perf_mc->base;  }
   else { printf("failed to create perf segment!\n"); exit(1); }

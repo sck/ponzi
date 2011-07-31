@@ -6,6 +6,30 @@
 #define IS(s) cl_intern(S(s))
 Id S_if, S_quote, S_set, S_define, S_lambda, S_begin, S_icounter;
 
+Id string_ref;
+
+Id cl_string_parse(void *b, Id s) {
+  Id ary = cl_string_split(b, s, '"');
+  int string_mode = 0;
+  Id v;
+  int i = 0;
+  Id r = cl_ary_new(b);
+  while ((v = cl_ary_iterate(b, ary, &i)).s) {
+    if (!string_mode) {
+      cl_ary_push(b, r, v);
+    } else {
+      cl_ary_push(b, string_ref, v);
+      Id sr = S("(string-ref ");
+      cl_string_append(b, sr, cl_string_new_number(b, 
+          cl_int(cl_ary_len(b, string_ref) - 1)));
+      cl_string_append(b, sr, S(")"));
+      cl_ary_push(b, r, sr);
+    }
+    string_mode = 1 - string_mode;
+  }
+  return cl_ary_join_by_s(b, r, S(""));
+}
+
 Id cl_tokenize(void *b, Id va_s) {
   if (!va_s.s) return clNil;
   return cl_string_split(b,
@@ -51,9 +75,6 @@ int cl_process_number(char *result, char *source) {
 
 Id cl_atom(void *b, Id token) {
   CL_ACQUIRE_STR_D(dt, token, clNil);
-  if (dt.l > 1 && dt.s[0] == ':')  {
-      return cl_intern(cl_string_sub_str_new(b, token, 1, -1));
-  }
   char *ep;
   char n[1024];
   int base = cl_process_number((char *)&n, dt.s);
@@ -84,7 +105,9 @@ Id cl_read_from(void *b, Id tokens) {
   return clNil;
 }
 
-Id cl_parse(void *b, Id va_s) { return cl_read_from(b, cl_tokenize(b, va_s)); }
+Id cl_parse(void *b, Id va_s) { 
+  return cl_read_from(b, cl_tokenize(b, cl_string_parse(b, va_s))); 
+}
 
 void cl_perf_count(Id this) {
   if (cl_perf_mode) return;
@@ -102,16 +125,23 @@ void cl_perf_show() {
 
 #define cl_eval2(x, e) cl_eval(b, x, e, this, 1)
 #define RETURN(v) { rv = v; goto finish; }
+size_t nested_depth = 0;
 Id cl_eval(void *b, Id x, Id env, Id this, int last) {
   //cl_perf_count(this);
-tail_rc_start:
+  nested_depth++;
   cl_retain(clNil, env);
   cl_garbage_collect(b);
+  Id func_name = clNil;
+tail_rc_start:
+  {}
   Id x0, exp, val= clNil, var, vars = clNil, rv = clNil;
-  //printf("START: %x %lx\n", CL_ADR(vars), &vars);
   if (!x.s) RETURN(clNil);
+  //printf("START: %x %lx\n", CL_ADR(vars), &vars);
   env = (env.s ? env : cl_globals);
   if (CL_TYPE(x) == CL_TYPE_SYMBOL) {
+    if (cl_string_starts_with(b, x, S(":"))) {
+      RETURN(cl_intern(cl_string_sub_str_new(b, x, 1, -1)));
+    }
     RETURN(cl_env_find(b, env, x));
   } else if (CL_TYPE(x) != CL_TYPE_ARRAY) {
     RETURN(x); // constant literal
@@ -128,9 +158,9 @@ tail_rc_start:
     cl_env_find_and_set(b, env, var, cl_eval2(exp, env));
   } else if (cl_equals_i(x0, S_define)) { // (define var exp)
     var = ca_s(x), exp = ca_th(x);
-    cl_ht_set(b, env, var, cl_eval2(exp, env));
+    return cl_ht_set(b, env, var, cl_eval2(exp, env));
   } else if (cl_equals_i(x0, S_lambda)) { //(lambda (var*) exp)
-    Id l = cl_ary_new(b); 
+    Id l = cl_ary_new(b); cl_ary_set_lambda(b, l);
     cl_ary_push(b, l, ca_s(x)); cl_ary_push(b, l, ca_th(x));
     cl_ary_push(b, l, env);
     RETURN(l);
@@ -147,11 +177,11 @@ tail_rc_start:
     int i = 1;
     while ((v = cl_ary_iterate(b, x, &i)).s) 
         cl_ary_push(b, vars, cl_eval2(v, env));
-    Id func_name = x0;
+    func_name = x0;
     Id lambda = cl_env_find(b, env, func_name);
     if (!lambda.s) { 
       RETURN(cl_handle_error_with_err_string(__FUNCTION__, "Unknown proc", 
-          cl_string_ptr(b, func_name))); 
+          cl_string_ptr(func_name))); 
     }
     if (cl_is_type_i(lambda, CL_TYPE_CFUNC)) {
       RETURN(cl_call(b, lambda, vars));
@@ -162,31 +192,45 @@ tail_rc_start:
        snprintf(es, 1023, "Parameter count mismatch! (have %d, expected %d)", 
            cl_ary_len(b, vars), cl_ary_len(b, vdecl));  
        RETURN(cl_handle_error_with_err_string(__FUNCTION__, 
-           es, cl_string_ptr(b, func_name)));
+           es, cl_string_ptr(func_name)));
     }
     int tail_rc = 0;
     if (cl_equals_i(func_name, this)) tail_rc = last;
+    printf("func_name %s this %s\n", cl_string_ptr(func_name),
+        cl_string_ptr(this));
     Id e = tail_rc ? env : cl_env_new(b, cl_ary_index(b, lambda, 2)), p;
     i = 0;
     while ((p = cl_ary_iterate(b, vdecl, &i)).s) 
         cl_ht_set(b, e, p, cl_ary_index(b, vars, i - 1));
     if (tail_rc) {
+      printf("%ld TAILRC\n", nested_depth);
       RETURN(clTail);
     }
     Id r =  cl_eval(b, cl_ary_index(b, lambda, 1), e, func_name, 1);
-    if (r.t.d.i == 2) {
-      cl_release(vars);
-      cl_release(env);
-      env = e;
-      x = cl_ary_index(b, lambda, 1);
-      goto tail_rc_start;
-    }
+    // tail rc return
+    //if (r.t.d.i == 2) {
+    //  printf("TAILRC RETURN: %s %ld\n", cl_string_ptr(this), nested_depth);
+    //  cl_release(vars);
+    //  cl_release(env);
+    //  this = func_name;
+    //  env = e;
+    //  x = cl_ary_index(b, lambda, 1);
+    //  goto tail_rc_start;
+    //}
     RETURN(r);
   }
 
 finish:
   cl_release(vars);
+  if (rv.t.d.i == 2 && cl_equals_i(func_name, this)) {
+    printf("TAIL RC RETURN START!\n");
+    printf("this: %s\n", cl_string_ptr(this));
+    printf("func_name: %s\n", cl_string_ptr(func_name));
+    printf("depth: %ld\n", nested_depth);
+    goto tail_rc_start;
+  }
   cl_release(env);
+  nested_depth--;
   return rv;
 }
 
@@ -248,21 +292,43 @@ Id cl_list(VB, Id x) { return x; }
 Id cl_is_list(VB, Id x) { return cb(cl_is_type_i(x, CL_TYPE_ARRAY)); }
 Id cl_is_null(VB, Id x) { return cb(cnil(x)); }
 Id cl_is_symbol(VB, Id x) { return cb(cl_is_type_i(x, CL_TYPE_SYMBOL)); }
-Id cl_display(VB, Id x) { printf("%s", cl_string_ptr(b, cl_ary_join_by_s(b, 
+Id cl_display(VB, Id x) { printf("%s", cl_string_ptr(cl_ary_join_by_s(b, 
     cl_ary_map(b, x, cl_to_string), S(" ")))); fflush(stdout); return clNil;}
 Id cl_newline(VB, Id x) { printf("\n"); return clNil;}
 Id cl_resetline(VB, Id x) { printf("\r"); fflush(stdout); return clNil;}
 Id cl_current_ms(VB, Id x) { return cl_int((int)cl_current_time_ms());}
 Id __cl_perf_show(VB, Id x) { cl_perf_show();return clNil;}
+Id cl_make_hash(VB, Id x) { return cl_ht_new(b); }
+Id cl_hash_set(VB, Id x) { return cl_ht_set(b, ca_f(x), ca_s(x), ca_th(x)); }
+Id cl_hash_get(VB, Id x) { return cl_ht_get(b, ca_f(x), ca_s(x)); }
+Id cl_make_array(VB, Id x) { return cl_ary_new(b); }
+Id cl_array_set(VB, Id x) { return cl_ary_set(b, ca_f(x), CL_INT(ca_s(x)), 
+    ca_th(x)); }
+Id cl_array_get(VB, Id x) { return cl_ary_index(b, ca_f(x), CL_INT(ca_s(x))); }
+Id cl_array_push(VB, Id x) { return cl_ary_push(b, ca_f(x), ca_s(x)); }
+Id cl_array_pop(VB, Id x) { return cl_ary_pop(b, ca_f(x)); }
+Id cl_array_unshift(VB, Id x) { return cl_ary_unshift(b, ca_f(x)); }
+Id cl_array_len(VB, Id x) { return cl_int(cl_ary_len(b, ca_f(x))); }
+Id cl_string_ref(VB, Id x) { 
+    return cl_ary_index(b, string_ref, CL_INT(ca_f(x))); }
+Id _cl_string_split(VB, Id x) { 
+    return cl_string_split2(b, ca_f(x), ca_s(x)); }
 
 char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms", 
-    "perf-show", 0};
+    "perf-show", "make-hash", "hash-set", "hash-get", 
+    "make-array", "array-get", "array-set", "array-push", 
+    "array-pop", "array-unshift", "array-len", "string-ref", 
+    "string-split", 0};
 Id (*cl_std_f[])(void *b, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_gt, cl_lt, cl_ge, 
     cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons, cl_car, cl_cdr,
     cl_list, cl_is_list, cl_is_null, cl_is_symbol, cl_display,
-    cl_newline, cl_resetline, cl_current_ms, __cl_perf_show, 0};
+    cl_newline, cl_resetline, cl_current_ms, __cl_perf_show, 
+    cl_make_hash, cl_hash_set, cl_hash_get, cl_make_array,
+    cl_array_get, cl_array_set, cl_array_push, cl_array_pop,
+    cl_array_unshift, cl_array_len, cl_string_ref, 
+    _cl_string_split, 0};
 
 void cl_add_perf_symbols(void *b) {
   S_icounter = IS("icounter");
@@ -280,33 +346,58 @@ Id cl_to_inspect(void *b, Id exp) {
     Id s = S(":");
     return cl_string_append(b, s, exp);
   }
-  if (CL_TYPE(exp) == CL_TYPE_STRING) {
-    Id s = S("(quote ");
-    cl_string_append(b, s, exp);
-    return cl_string_append(b, s, S(")"));
-  }
   return cl_to_string(b, exp);
 }
 
 Id cl_to_string(void *b, Id exp) {
   if (CL_TYPE(exp) == CL_TYPE_BOOL) { return S(exp.s ? "true" : "null"); }
   if (cl_is_number(exp)) return cl_string_new_number(b, exp);
-  if (CL_TYPE(exp) == CL_TYPE_CFUNC) return S("CFUNC");
+  if (CL_TYPE(exp) == CL_TYPE_CFUNC) { 
+    Id s = S("CFUNC<");
+    cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR(cf, exp, CL_TYPE_CFUNC, clNil);
+    cl_string_append(b, s, cl_string_new_hex_number(b, 
+        cl_int((long)&cf->func_ptr)));
+    cl_string_append(b, s, S(">"));
+    return s;
+  }
+  if (CL_TYPE(exp) == CL_TYPE_SYMBOL) {
+    return exp;
+  }
+  if (CL_TYPE(exp) == CL_TYPE_ARRAY) {
+    if (cl_ary_is_lambda(b, exp)) {
+      Id s = S("(lambda (");
+      cl_string_append(b, s, cl_ary_join_by_s(b, cl_ary_map(b, ca_f(exp), 
+          cl_to_string), S(" ")));
+      cl_string_append(b, s, S(") ("));
+      cl_string_append(b, s, cl_ary_join_by_s(b, cl_ary_map(b, ca_s(exp), 
+          cl_to_string), S(" ")));
+      cl_string_append(b, s, S("))"));
+      return s;
+    }
+    Id s = S("(");
+    cl_string_append(b, s, cl_ary_join_by_s(b, 
+        cl_ary_map(b, exp, cl_to_string), S(" ")));
+    return cl_string_append(b, s, S(")"));
+  }
+  if (CL_TYPE(exp) == CL_TYPE_HASH) {
+    Id s = S("{");
+    cl_string_append(b, s, cl_ary_join_by_s(b, 
+        cl_ht_map(b, exp, cl_to_string), S(" ")));
+    return cl_string_append(b, s, S("}"));
+  }
   if (CL_TYPE(exp) != CL_TYPE_ARRAY) return exp;
-  Id s = S("[ ");
-  cl_string_append(b, s, cl_ary_join_by_s(b, 
-      cl_ary_map(b, exp, cl_to_string), S(" ")));
-  return cl_string_append(b, s, S(" ]"));
 }
 
 void cl_repl(void *b, FILE *f, int interactive) {
   while (1) {
+    string_ref = cl_retain(clNil, cl_ary_new(b));
     Id parsed = cl_retain(clNil, cl_parse(b, 
         cl_input(b, f, interactive, cl_perf_mode ? "perf>" :  "schemejit> ")));
     Id val = cl_eval(b, parsed, cl_globals, clNil, 1);
     cl_release(parsed);
+    cl_release(string_ref);
     if (feof(f)) return;
-    if (interactive) printf("-> %s\n", cl_string_ptr(b, cl_to_inspect(b, val)));
+    if (interactive) printf("=> %s\n", cl_string_ptr(cl_to_inspect(b, val)));
     cl_garbage_collect(b);
     //cl_mem_dump(b);
   }
