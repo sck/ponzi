@@ -126,10 +126,16 @@ void cl_perf_show() {
 #define cl_eval2(x, e) cl_eval(b, x, e, this, this, 1)
 #define RETURN(v) { rv = v; goto finish; }
 size_t nested_depth = 0;
+size_t stack_overflow = 0;
 size_t rc_count = 0;
 Id cl_eval(void *b, Id x, Id env, Id this, Id previous, int last) {
   //cl_perf_count(this);
   nested_depth++;
+  if (stack_overflow) return clNil;
+  if (nested_depth > 2000) {
+    printf("STACKoverflow\n");
+    stack_overflow = 1;
+  }
   cl_retain(clNil, env);
   cl_garbage_collect(b);
   Id func_name = clNil;
@@ -191,7 +197,7 @@ tail_rc_start:
           cl_string_ptr(func_name))); 
     }
     if (cl_is_type_i(lambda, CL_TYPE_CFUNC)) {
-      RETURN(cl_call(b, lambda, vars));
+      RETURN(cl_call(b, lambda, env, vars));
     }
     Id vdecl = cl_ary_index(b, lambda, 0);
     if (cl_ary_len(b, vdecl) != cl_ary_len(b, vars))  {
@@ -286,7 +292,7 @@ Id  __try_convert_to_ints(void *b, Id x) {
 #define R  ; } return r;
 
 Id cl_to_string(void *b, Id exp);
-#define VB void *b
+#define VB void *b, Id env
 
 Id cl_add(VB, Id x) { ON_I r = cl_int(ai + bi) ON_F r = cl_float(af + bf) R }
 Id cl_sub(VB, Id x) { ON_I r = cl_int(ai - bi) ON_F r = cl_float(af - bf) R }
@@ -327,6 +333,20 @@ Id cl_string_ref(VB, Id x) {
     return cl_ary_index(b, string_ref, CL_INT(ca_f(x))); }
 Id _cl_string_split(VB, Id x) { 
     return cl_string_split2(b, ca_f(x), ca_s(x)); }
+Id cl_array_each(VB, Id x) { 
+  Id this = clNil;
+  Id e = cl_env_new(b, env);
+  Id lambda = ca_s(x);
+  Id vdecl = ca_f(lambda);
+  int l = cl_ary_len(b, vdecl);
+  Id pn = l > 0 ? ca_f(vdecl) : clNil;
+  int i = 0; 
+  Id v;
+  while ((v = cl_ary_iterate(b, ca_f(x), &i)).s) {
+    if (pn.s) cl_ht_set(b, e, pn, v);
+    cl_eval(b, ca_s(lambda), e, clNil, clNil, 0);
+  }
+}
 
 char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
@@ -334,15 +354,15 @@ char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "perf-show", "make-hash", "hash-set", "hash-get", 
     "make-array", "array-get", "array-set", "array-push", 
     "array-pop", "array-unshift", "array-len", "string-ref", 
-    "string-split", 0};
-Id (*cl_std_f[])(void *b, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_gt, cl_lt, cl_ge, 
+    "string-split", "array-each", 0};
+Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_gt, cl_lt, cl_ge, 
     cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons, cl_car, cl_cdr,
     cl_list, cl_is_list, cl_is_null, cl_is_symbol, cl_display,
     cl_newline, cl_resetline, cl_current_ms, __cl_perf_show, 
     cl_make_hash, cl_hash_set, cl_hash_get, cl_make_array,
     cl_array_get, cl_array_set, cl_array_push, cl_array_pop,
     cl_array_unshift, cl_array_len, cl_string_ref, 
-    _cl_string_split, 0};
+    _cl_string_split, cl_array_each, 0};
 
 void cl_add_perf_symbols(void *b) {
   S_icounter = IS("icounter");
@@ -405,6 +425,8 @@ Id cl_to_string(void *b, Id exp) {
 
 void cl_repl(void *b, FILE *f, int interactive) {
   while (1) {
+    stack_overflow = 0;
+    nested_depth = 0;
     string_ref = cl_retain(clNil, cl_ary_new(b));
     Id parsed = cl_retain(clNil, cl_parse(b, 
         cl_input(b, f, interactive, cl_perf_mode ? "perf>" :  "schemejit> ")));

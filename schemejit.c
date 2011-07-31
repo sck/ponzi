@@ -374,9 +374,9 @@ Id cn(Id v) { return CL_TYPE(v) == CL_TYPE_BOOL ? cl_int(v.s ? 1 : 0) : v; }
  */
 
 
-char *cl_types_s[] = {"nil", "float", "int", "string", "symbol", "cfunc", "hash", 
+char *cl_types_s[] = {"nil", "float", "int", "special", "string", "symbol", "cfunc", "hash", 
     "hash pair", "array"};
-char *cl_types_i[] = {"x", "f", "i", "s", ":", "C", "{", "P", "["};
+char *cl_types_i[] = {"x", "f", "i", "S", "s", ":", "C", "{", "P", "["};
 
 char *cl_type_to_cp(short int t) {
   if (t > CL_TYPE_MAX || t < 0) { return "<unknown>"; }
@@ -493,7 +493,7 @@ size_t cl_min(size_t a, size_t b) { return a < b ? a : b; }
 
 void cl_garbage_collect(void *b) {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
-  if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
+  //if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
   size_t mem_start = cl_md->total_size + cl_header_size() - 
       cl_md->heap_size;
   char *p = mem_start + b;
@@ -921,9 +921,9 @@ void *cl_init(void *b, size_t size) {
  * FFI
  */
 
-typedef struct { Id (*func_ptr)(void *b, Id); } cl_cfunc_t;
+typedef struct { Id (*func_ptr)(void *b, Id, Id); } cl_cfunc_t;
 
-Id cl_define_func(void *b, char *name, Id (*p)(void *b, Id), Id env) { 
+Id cl_define_func(void *b, char *name, Id (*p)(void *b, Id, Id), Id env) { 
   Id va_f; CL_ALLOC(va_f, CL_TYPE_CFUNC);
   cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR0(cf, va_f, CL_TYPE_CFUNC, clNil);
   cf->func_ptr = p;
@@ -931,9 +931,9 @@ Id cl_define_func(void *b, char *name, Id (*p)(void *b, Id), Id env) {
   return clTrue;
 }
 
-Id cl_call(void *b, Id va_f, Id x) { 
+Id cl_call(void *b, Id va_f, Id env, Id x) { 
   cl_cfunc_t *cf; CL_TYPED_VA_TO_PTR(cf, va_f, CL_TYPE_CFUNC, clNil);
-  Id r = cf->func_ptr(b, x);
+  Id r = cf->func_ptr(b, env, x);
   return r;
 }
 

@@ -7,3 +7,9 @@
 (define times (lambda (n l) (int-times n l (+ n 1))))
 
 
+(define array-map (lambda (array l) 
+  (begin 
+    (define a (make-array)) 
+    (array-each array (lambda (x) 
+      (array-push a (l x)))) 
+   a)))
