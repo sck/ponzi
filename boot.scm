@@ -18,3 +18,8 @@
       (array-push a (l x)))) 
    a))
 
+(define array-grep (lambda (array rx)
+  (define a (make-array))
+  (array-each array (lambda (v)
+    (if (rx-match-string rx v) (array-push a v) 0)))
+  a))

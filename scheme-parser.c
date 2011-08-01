@@ -191,7 +191,10 @@ tail_rc_start:
   if (cl_equals_i(x0, S_quote)) {
     RETURN(ca_s(x));
   } else if (cl_equals_i(x0, S_regexp)) {
-    RETURN(cl_ary_clone_part(b, x, 1, -1));
+    Id rx = cl_rx_new(cl_ary_join_by_s(b,  
+      cl_ary_clone_part(b, x, 1, -1), S(" ")));
+    //Id rx = cl_rx_new(D("ca_s", ca_s(x)));
+    return rx;
   } else if (cl_equals_i(x0, S_if)) { // (if test conseq alt)
     Id test = ca_s(x), conseq = ca_th(x), alt = ca_fth(x);
     Id t = cl_eval2(test, env);
@@ -396,6 +399,9 @@ Id cl_hash_each(VB, Id x) {
   }
   return clNil;
 }
+Id _cl_rx_match_string(VB, Id x) { 
+  return cb(cl_rx_match(b, ca_f(x), ca_s(x)));
+}
 
 char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
@@ -403,7 +409,8 @@ char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "perf-show", "make-hash", "hash-set", "hash-get", 
     "make-array", "array-get", "array-set", "array-push", 
     "array-pop", "array-unshift", "array-len", "string-ref", 
-    "string-split", "array-each", "hash-each", 0};
+    "string-split", "array-each", "hash-each", 
+    "rx-match-string", 0};
 
 Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_gt, cl_lt, cl_ge, 
     cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons, cl_car, cl_cdr,
@@ -412,7 +419,8 @@ Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_
     cl_make_hash, cl_hash_set, cl_hash_get, cl_make_array,
     cl_array_get, cl_array_set, cl_array_push, cl_array_pop,
     cl_array_unshift, cl_array_len, cl_string_ref, 
-    _cl_string_split, cl_array_each, cl_hash_each, 0};
+    _cl_string_split, cl_array_each, cl_hash_each, 
+    _cl_rx_match_string, 0};
 
 void cl_add_perf_symbols(void *b) {
   S_icounter = IS("icounter");

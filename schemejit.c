@@ -1173,7 +1173,7 @@ typedef struct {
   Id match_s;
 } cl_rx_t;
 
-#define cl_regexp_new() __cl_regexp_new(where, line, b);
+#define cl_rx_new(match_s) __cl_rx_new(__FUNCTION__, __LINE__, b, match_s);
 Id __cl_rx_new(const char *where, int line, void *b, Id match_s) {
   Id va_rx; CL_ALLOC(va_rx, CL_TYPE_REGEXP); 
   cl_rx_t *rx; CL_TYPED_VA_TO_PTR(rx, va_rx, CL_TYPE_REGEXP, clNil);

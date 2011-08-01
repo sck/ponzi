@@ -1,7 +1,7 @@
 
 Id cl_debug() { 
 }
-#define D(c, va) __d(b, __FUNCTION__, __LINE__, c, va);
+#define D(c, va) __d(b, __FUNCTION__, __LINE__, c, va)
 
 Id cl_to_string(void *b, Id exp);
 
