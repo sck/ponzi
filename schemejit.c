@@ -25,13 +25,7 @@ typedef union {
   int address;
 } cl_reg_type;
 
-typedef union {
-  size_t s;
-  struct {
-    short int type;
-    cl_reg_type d;
-  } t;
-} Id;
+typedef union { size_t s; struct { short int type; cl_reg_type d; } t; } Id;
 
 
 #define CL_DB_MAGIC 0xF0F0
@@ -252,7 +246,8 @@ int cl_var_free(void *b) {
 #define CL_TYPE_HASH 7
 #define CL_TYPE_HASH_PAIR 8
 #define CL_TYPE_ARRAY 9
-#define CL_TYPE_MAX 9
+#define CL_TYPE_REGEXP 10
+#define CL_TYPE_MAX 10
 
 #ifdef CL_GC_DEBUG
 Id __cl_retain(const char *where, int line, void *b, Id from, Id va);
@@ -310,7 +305,9 @@ void cl_alloc_debug(void *b, char *p, short int type) {
       cl_type_to_cp(type));
 }
 
+size_t cl_alloc_counter = 0;
 Id cl_valloc(void *b, const char *where, short int type) {
+  cl_alloc_counter++;
   cl_mem_chunk_descriptor_t *c = cl_md_first_free(b); 
   if (!c) return cl_handle_error_with_err_string_nh(where, "1: Out of memory");
   Id r = { 0x0 };
@@ -493,12 +490,12 @@ size_t cl_min(size_t a, size_t b) { return a < b ? a : b; }
 
 void cl_garbage_collect(void *b) {
   size_t entries = cl_md->heap_size / CL_STATIC_ALLOC_SIZE;
-  if ((rand() & 1023) != 0) entries = cl_min(entries, 10);
+  if (cl_alloc_counter < 1000) entries = 10;
+  else cl_alloc_counter = 0;
   size_t mem_start = cl_md->total_size + cl_header_size() - 
       cl_md->heap_size;
   char *p = mem_start + b;
   size_t i;
-  //printf("GC: ");
   for (i = 0; i < entries; ++i, p += CL_STATIC_ALLOC_SIZE) {
     rc_t *rc = (rc_t *)p;
     short int *t = (short int *) (p + sizeof(int));
@@ -506,11 +503,9 @@ void cl_garbage_collect(void *b) {
       Id va;
       PTR_TO_VA(va, p + RCS);
       CL_TYPE(va) = *t;
-      //printf("%x%s ", CL_ADR(va), cl_type_to_i_cp(*t));
       cl_delete(b, va);
     }
   }
-  //printf("\n");
 }
 
 #ifdef CL_GC_DEBUG
@@ -623,6 +618,9 @@ int cl_string_hash(void *b, Id va_s, size_t *hash) {
   (*hash) = v;
   return 1;
 }
+
+int cl_string_len(void *b, Id va_s) {
+  CL_ACQUIRE_STR_D(ds, va_s, 0); return ds.l; }
 
 #define cl_string_equals_cp_i(s, sb)  \
     __cl_string_equals_cp_i(__FUNCTION__, __LINE__, b, s, sb)
@@ -779,19 +777,49 @@ Id __cl_ary_new(const char *where, int line, void *b);
   __cl_ary_push(__FUNCTION__, __LINE__, b, var_ary, va)
 Id __cl_ary_push(const char *where, int line, void *b, Id va_ary, Id va);
 
+
+typedef struct {
+  int initialized;
+  int k;
+  cl_hash_t *ht;
+  Id va_hr;
+  cl_ht_entry_t *hr;
+} cl_ht_iterate_t;
+
+cl_ht_entry_t *cl_ht_iterate(void *b, Id va_ht, cl_ht_iterate_t *h) {
+  int new_bucket = 0;
+  if (!h->initialized) {
+    h->k = 0;
+    h->hr = &cl_ht_null_node;
+    h->va_hr = clNil;
+    CL_TYPED_VA_TO_PTR(h->ht, va_ht, CL_TYPE_HASH, 0); 
+    h->initialized = 1;
+  }
+next_bucket:
+  if (h->k >= CL_HT_BUCKETS) return 0;
+  if (!h->va_hr.s) { h->va_hr = h->ht->va_buckets[h->k];  new_bucket = 1;}
+  if (!h->va_hr.s) { h->k++; goto next_bucket; }
+  if (new_bucket) goto return_hr;
+next_pair:
+  h->va_hr = h->hr->va_next; 
+  if (!h->va_hr.s) { h->k++; goto next_bucket; }
+return_hr:
+  CL_TYPED_VA_TO_PTR(h->hr, h->va_hr, CL_TYPE_HASH_PAIR, 0); 
+  if (!h->hr) goto next_pair;
+  return h->hr;
+}
+
 Id cl_ht_map(void *b, Id va_ht, Id (*func_ptr)(void *b, Id)) {
-  int k; Id va_hr; cl_ht_entry_t *hr = &cl_ht_null_node; 
-  cl_hash_t *ht; CL_TYPED_VA_TO_PTR(ht, va_ht, CL_TYPE_HASH, clNil); 
+  cl_ht_iterate_t h;
+  h.initialized = 0;
+  cl_ht_entry_t *hr;
   Id r = cl_ary_new(b);
-  for (k = 0; k < CL_HT_BUCKETS; k++) {
-    for (va_hr = ht->va_buckets[k]; va_hr.s != 0 && hr != NULL; va_hr = hr->va_next) {
-      Id s = cl_string_new_0(b);
-      CL_TYPED_VA_TO_PTR(hr, va_hr, CL_TYPE_HASH_PAIR, clNil); 
-      cl_string_append(b, s, func_ptr(b, hr->va_key));
-      cl_string_append(b, s, S(" => "));
-      cl_string_append(b, s, func_ptr(b, hr->va_value));
-      cl_ary_push(b, r, s);
-    }
+  while ((hr = cl_ht_iterate(b, va_ht, &h))) {
+    Id s = cl_string_new_0(b);
+    cl_string_append(b, s, func_ptr(b, hr->va_key));
+    cl_string_append(b, s, S(" => "));
+    cl_string_append(b, s, func_ptr(b, hr->va_value));
+    cl_ary_push(b, r, s);
   }
   return r;
 }
@@ -960,12 +988,21 @@ void __ary_retain_all(void *b, Id from, ht_array_t *a) {
   for (i = a->start; i < a->size; i++) cl_retain(from, a->va_entries[i]);
 }
 
-Id cl_ary_clone(void *b, Id va_s) {
+#define cl_ary_clone(b, va_s) __cl_ary_clone(b, va_s, -1, -1)
+#define cl_ary_clone_part(b, va_s, s, c) __cl_ary_clone(b, va_s, s, c)
+Id __cl_ary_clone(void *b, Id va_s, int start, int count) {
   ht_array_t *ary_s; CL_TYPED_VA_TO_PTR(ary_s, va_s, CL_TYPE_ARRAY, clNil);
   Id va_c; CL_ALLOC(va_c, CL_TYPE_ARRAY);
   char *p_c = VA_TO_PTR(va_c), *p_s = VA_TO_PTR(va_s);
   memcpy(p_c, p_s, CL_CELL_SIZE);
-  __ary_retain_all(b, va_c, (ht_array_t *)p_c);
+  ht_array_t *a = (ht_array_t *)p_c;
+  int c = a->size - a->start;
+  if (start < 0) start = 0;
+  if (count < 0) count = c + count + 1;
+  if (start + count > a->size) count = a->size - start;
+  a->start = start;
+  a->size = start + count;
+  __ary_retain_all(b, va_c, a);
   return va_c;
 }
 
@@ -1073,7 +1110,8 @@ int cl_ary_len(void *b, Id va_ary) {
 
 Id cl_ary_index(void *b, Id va_ary, int i) {
   ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
-  if (ary->size - ary->start <= i) { return clNil; } 
+  if (i < 0) i = ary->size - ary->start + i;
+  if (ary->size - ary->start < i) { return clNil; } 
   return ary->va_entries[ary->start + i];
 }
 
@@ -1129,6 +1167,63 @@ Id cl_string_split2(void *b, Id va_s, Id sep) {
   if (ds.l == 0) return clNil;
   return cl_string_split(b, va_s, ds.s[0]);
 }
+
+#define CL_ARY_MAX_ENTRIES ((CL_CELL_SIZE - sizeof(Id)) / sizeof(Id))
+typedef struct {
+  Id match_s;
+} cl_rx_t;
+
+#define cl_regexp_new() __cl_regexp_new(where, line, b);
+Id __cl_rx_new(const char *where, int line, void *b, Id match_s) {
+  Id va_rx; CL_ALLOC(va_rx, CL_TYPE_REGEXP); 
+  cl_rx_t *rx; CL_TYPED_VA_TO_PTR(rx, va_rx, CL_TYPE_REGEXP, clNil);
+  cl_zero(b, va_rx);
+  rx->match_s = cl_retain2(va_rx, match_s);
+  cl_register_var(va_rx, where, line);
+  return va_rx; 
+}
+
+Id cl_rx_match_string(void *b, Id va_rx) {
+  cl_rx_t *rx; CL_TYPED_VA_TO_PTR(rx, va_rx, CL_TYPE_REGEXP, clNil);
+  return rx->match_s;
+}
+
+int __cl_rx_matchstar(int c, char *ms, int ml, char *s, int sl) {
+  do {
+    if (__cl_rx_matchhere(ms, ml, s, sl)) return 1;
+    if (sl < 1) return 0;
+    if (c != '.' && (sl < 1 || s[0] != c)) return 0;
+    sl--;
+    s++;
+  } while (1);
+}
+
+
+int __cl_rx_matchhere(char *ms, int ml, char *s, int sl) {
+  if (ml < 1) return 1;
+  if (ml > 1 && ms[1] == '*')
+    return __cl_rx_matchstar(ms[0], ms + 2, ml - 2, s, sl);
+  if (ms[0] == '$' && ml == 1)
+    return sl == 0;   
+  if (sl > 0 && (ms[0] == '.' || ms[0] == s[0])) 
+    return __cl_rx_matchhere(ms + 1, ml - 1, s + 1, sl - 1);
+  return 0;
+}
+
+int cl_rx_match(void *b, Id va_rx, Id va_s) {
+  cl_rx_t *rx; CL_TYPED_VA_TO_PTR(rx, va_rx, CL_TYPE_REGEXP, 0);
+  CL_ACQUIRE_STR_D(ms, rx->match_s, 0);
+  CL_ACQUIRE_STR_D(s, va_s, 0);
+  if (!ms.l) return 0;
+  if (ms.s[0] == '^')
+      return __cl_rx_matchhere(ms.s + 1, ms.l - 1, s.s, s.l);
+  do {
+    if (__cl_rx_matchhere(ms.s, ms.l, s.s, s.l)) return 1;
+    s.s++;
+    s.l--;
+  } while (s.l > 0);
+}
+
 
 Id cl_input(void *b, FILE *f, int interactive, char *prompt) {
   if (interactive) printf("%ld:%s", cl_active_entries(b), prompt); 

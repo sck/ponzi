@@ -4,7 +4,8 @@
  */
 
 #define IS(s) cl_intern(S(s))
-Id S_if, S_quote, S_globals, S_set, S_define, S_lambda, S_begin, S_icounter;
+Id S_if, S_quote, S_globals, S_set, S_define, S_lambda, S_begin,
+    S_icounter, S_dot, S_regexp;
 
 Id string_ref;
 
@@ -85,28 +86,51 @@ Id cl_atom(void *b, Id token) {
   return cl_intern(token);
 }
 
+#define RETURN(v) { rv = v; goto finish; }
 Id cl_read_from(void *b, Id tokens) {
+  Id rv = clNil;
+  int quote = 0;
+
   cl_reset_errors(b);
   if (!tokens.s) return clNil;
+next_token:
   if (cl_ary_len(b, tokens) == 0) 
       return cl_handle_error_with_err_string_nh(__FUNCTION__, 
           "unexpected EOF while reading");
   Id token = cl_ary_unshift(b, tokens);
+  if (cl_string_starts_with(b, token, S("'"))) {
+    Id word = cl_string_sub_str_new(b, token, 1, -1);
+    quote = 1;
+    if (cl_string_len(b, word) > 0) {
+      token = word; 
+    } else {
+      goto next_token;
+    }
+  }
   if (cl_string_equals_cp_i(token, "(")) {
     Id l = cl_ary_new(b);
     while (!cl_string_equals_cp_i(ca_f(tokens), ")")) {
         cl_ary_push(b, l, cl_read_from(b, tokens)); CE(break) }
     cl_ary_unshift(b, tokens);
-    return l;
+    RETURN(l);
   } else if (cl_string_equals_cp_i(token, ")")) {
     return cl_handle_error_with_err_string_nh(__FUNCTION__, 
         "unexpected )");
-  } else return cl_atom(b, token);
-  return clNil;
+  } else RETURN(cl_atom(b, token));
+
+finish:
+  if (quote) {
+    Id ql = cl_ary_new(b);
+    cl_ary_push(b, ql, S_quote);
+    cl_ary_push(b, ql, rv);
+    rv = ql;
+  }
+  return rv;
 }
 
 Id cl_parse(void *b, Id va_s) { 
-  return cl_read_from(b, cl_tokenize(b, cl_string_parse(b, va_s))); 
+  return cl_read_from(b, cl_tokenize(b, cl_string_parse(b,
+      va_s))); 
 }
 
 void cl_perf_count(Id this) {
@@ -124,13 +148,12 @@ void cl_perf_show() {
 }
 
 #define cl_eval2(x, e) cl_eval(b, x, e, this, this, 1)
-#define RETURN(v) { rv = v; goto finish; }
 size_t nested_depth = 0;
 size_t stack_overflow = 0;
 size_t rc_count = 0;
+Id cl_begin(void *b, Id x, int start, Id _env, Id this, Id previous);
 Id cl_eval(void *b, Id x, Id _env, Id this, Id previous, int last) {
   Id x0, exp, val, var, vars, rv, env;
-  //cl_perf_count(this);
   nested_depth++;
   if (stack_overflow) return clNil;
   if (nested_depth > 2000) {
@@ -154,16 +177,25 @@ tail_rc_start:
   } else if (CL_TYPE(x) != CL_TYPE_ARRAY) {
     RETURN(x); // constant literal
   } 
+  if (CL_TYPE(x) == CL_TYPE_ARRAY && cl_ary_len(b, x) == 3) {
+    Id m = ca_s(x);
+    if (CL_TYPE(m) == CL_TYPE_SYMBOL && cl_equals_i(m, S_dot)) {
+      Id a = cl_retain(clNil, cl_ary_new(b));
+      cl_ary_push(b, a, cl_eval2(ca_f(x), env));
+      cl_ary_push(b, a, cl_eval2(ca_th(x), env));
+      cl_release(a);
+      RETURN(a);
+    }
+  }
   x0 = ca_f(x);
   if (cl_equals_i(x0, S_quote)) {
     RETURN(ca_s(x));
+  } else if (cl_equals_i(x0, S_regexp)) {
+    RETURN(cl_ary_clone_part(b, x, 1, -1));
   } else if (cl_equals_i(x0, S_if)) { // (if test conseq alt)
-    //printf("IF START\n");
     Id test = ca_s(x), conseq = ca_th(x), alt = ca_fth(x);
     Id t = cl_eval2(test, env);
-    Id rrr = cnil2(t).s ? cl_eval2(conseq, env) : cl_eval2(alt, env);
-    //printf("IF END\n");
-    RETURN(rrr);
+    RETURN(cnil2(t).s ? cl_eval2(conseq, env) : cl_eval2(alt, env));
   } else if (cl_equals_i(x0, S_set)) { // (set! var exp)
     var = ca_s(x), exp = ca_th(x);
     cl_env_find_and_set(b, env, var, cl_eval2(exp, env));
@@ -172,21 +204,19 @@ tail_rc_start:
     RETURN(cl_ht_set(b, env, var, cl_eval2(exp, env)));
   } else if (cl_equals_i(x0, S_lambda)) { //(lambda (var*) exp)
     Id l = cl_ary_new(b); cl_ary_set_lambda(b, l);
-    cl_ary_push(b, l, ca_s(x)); cl_ary_push(b, l, ca_th(x));
-    cl_ary_push(b, l, env);
+    cl_ary_push(b, l, ca_s(x)); 
+    Id c = cl_ary_new(b);
+    int i = 2;
+    cl_ary_push(b, c, S_begin);
+    Id v;
+    while ((v = cl_ary_iterate(b, x, &i)).s) cl_ary_push(b, c, v);
+    cl_ary_push(b, l, c); cl_ary_push(b, l, env);
     RETURN(l);
   } else if (cl_equals_i(x0, S_begin)) {  // (begin exp*)
-    int i = 1;
-    int l = cl_ary_len(b, x);
-    //printf("BEGIN START\n");
-    while ((exp = cl_ary_iterate(b, x, &i)).s) 
-      val = cl_eval(b, exp, env, this, this, l == i);
-    //printf("BEGIN END\n");
-    RETURN(val);
+    RETURN(cl_begin(b, x, 1, env, this, this));
   } else {  // (proc exp*)
     Id v;
     vars = cl_retain(clNil, cl_ary_new(b));
-    //printf("NEW: %x %lx\n", CL_ADR(vars), &vars);
     int i = 1;
     while ((v = cl_ary_iterate(b, x, &i)).s) 
         cl_ary_push(b, vars, cl_eval2(v, env));
@@ -199,59 +229,44 @@ tail_rc_start:
     if (cl_is_type_i(lambda, CL_TYPE_CFUNC)) {
       RETURN(cl_call(b, lambda, env, vars));
     }
-    Id vdecl = cl_ary_index(b, lambda, 0);
-    if (cl_ary_len(b, vdecl) != cl_ary_len(b, vars))  {
-       char es[1024]; 
-       snprintf(es, 1023, "Parameter count mismatch! (have %d, expected %d)", 
-           cl_ary_len(b, vars), cl_ary_len(b, vdecl));  
-       RETURN(cl_handle_error_with_err_string(__FUNCTION__, 
-           es, cl_string_ptr(func_name)));
-    }
     int tail_rc = 0;
     if (cl_equals_i(func_name, this)) tail_rc = last;
-    //printf("func_name %s this %s\n", cl_string_ptr(func_name),
-    //    cl_string_ptr(this));
     Id e = tail_rc ? env : cl_env_new(b, cl_ary_index(b, lambda, 2)), p;
-    i = 0;
-    while ((p = cl_ary_iterate(b, vdecl, &i)).s) 
-        cl_ht_set(b, e, p, cl_ary_index(b, vars, i - 1));
-    if (tail_rc) {
-      //printf("%ld TAILRC\n", nested_depth);
-      //D("e", e);
-      RETURN(clTail);
+    Id vdecl = cl_ary_index(b, lambda, 0);
+    if (CL_TYPE(vdecl) == CL_TYPE_ARRAY) {
+      if (cl_ary_len(b, vdecl) != cl_ary_len(b, vars))  {
+         char es[1024]; 
+         snprintf(es, 1023, "Parameter count mismatch! (have %d, expected %d)", 
+             cl_ary_len(b, vars), cl_ary_len(b, vdecl));  
+         RETURN(cl_handle_error_with_err_string(__FUNCTION__, 
+             es, cl_string_ptr(func_name)));
+      }
+      i = 0;
+      while ((p = cl_ary_iterate(b, vdecl, &i)).s) 
+          cl_ht_set(b, e, p, cl_ary_index(b, vars, i - 1));
+    } else {
+      cl_ht_set(b, e, vdecl, vars);
     }
-    Id r =  cl_eval(b, cl_ary_index(b, lambda, 1), e, func_name, this, 1);
-    // tail rc return
-    //if (r.t.d.i == 2) {
-    //  printf("TAILRC RETURN: %s %ld\n", cl_string_ptr(this), nested_depth);
-    //  cl_release(vars);
-    //  cl_release(env);
-    //  this = func_name;
-    //  env = e;
-    //  x = cl_ary_index(b, lambda, 1);
-    //  goto tail_rc_start;
-    //}
+    if (tail_rc) RETURN(clTail);
+    Id r =  cl_eval(b, cl_ary_index(b, lambda, 1), e, func_name, this, 0);
     RETURN(r);
   }
 
 finish:
   cl_release(vars);
-  //printf("this %s previous %s rv %ld clTail %ld\n",
-  //    cl_string_ptr(this), cl_string_ptr(previous),
-  //    rv.s, clTail.s);
-  if (rv.s == clTail.s && //cl_equals_i(func_name, this) && 
-      !cl_equals_i(this, previous)) {
-    //printf("TAIL RC RETURN START!\n");
-    //printf("this: %s\n", cl_string_ptr(this));
-    //printf("func_name: %s\n", cl_string_ptr(func_name));
-    //printf("depth: %ld\n", nested_depth);
-    //D("env", env);
-    //if (rc_count++ < 5) goto tail_rc_start;
-    goto tail_rc_start;
-  }
+  if (rv.s == clTail.s && !cl_equals_i(this, previous)) goto tail_rc_start;
   cl_release(_env);
   nested_depth--;
   return rv;
+}
+
+Id cl_begin(void *b, Id x, int start, Id env, Id this, Id previous) {
+  Id val = clNil, exp;
+  int i = start;
+  int l = cl_ary_len(b, x);
+  while ((exp = cl_ary_iterate(b, x, &i)).s) 
+    val = cl_eval(b, exp, env, this, previous, l == i);
+  return val;
 }
 
 Id  __try_convert_to_floats(void *b, Id x) {
@@ -305,9 +320,11 @@ Id cl_ge(VB, Id x) { ON_I r = cb(ai >= bi) ON_F r = cb(af >= bf) R }
 Id cl_le(VB, Id x) { ON_I r = cb(ai <= bi) ON_F r = cb(af <= bf) R }
 Id cl_eq(VB, Id x) { return cb(cl_equals_i(ca_f(x), ca_s(x))); }
 Id cl_length(VB, Id x) { return cl_int(cl_ary_len(b, x)); }
-Id cl_cons(VB, Id x) { return cl_ary_new_join(b, ca_f(x), ca_s(x)); }
+Id cl_cons(VB, Id x) { Id a = ca_f(x); Id r = cl_ary_new(b); 
+    cl_ary_push(b, r, ca_f(a)); cl_ary_push(b, r, ca_s(a)); 
+    return r; }
 Id cl_car(VB, Id x) { return ca_f(ca_f(x)); }
-Id cl_cdr(VB, Id x) { Id c = cl_ary_clone(b, ca_f(x)); cl_ary_unshift(b, c); return c; }
+Id cl_cdr(VB, Id x) { Id a = ca_f(x); return cl_ary_index(b, a, -1); }
 Id cl_list(VB, Id x) { return x; }
 Id cl_is_list(VB, Id x) { return cb(cl_is_type_i(x, CL_TYPE_ARRAY)); }
 Id cl_is_null(VB, Id x) { return cb(cnil(x)); }
@@ -333,19 +350,51 @@ Id cl_string_ref(VB, Id x) {
     return cl_ary_index(b, string_ref, CL_INT(ca_f(x))); }
 Id _cl_string_split(VB, Id x) { 
     return cl_string_split2(b, ca_f(x), ca_s(x)); }
+
 Id cl_array_each(VB, Id x) { 
+  Id this = clNil;
+  Id e = cl_env_new(b, env);
+  Id lambda = ca_s(x);
+  Id vdecl, pn;
+  int l;
+  if (!cl_is_type_i(lambda, CL_TYPE_CFUNC)) {
+    vdecl = ca_f(lambda);
+    l = cl_ary_len(b, vdecl);
+    pn = l > 0 ? ca_f(vdecl) : clNil;
+  }
+  int i = 0; 
+  Id v;
+  while ((v = cl_ary_iterate(b, ca_f(x), &i)).s) {
+    if (cl_is_type_i(lambda, CL_TYPE_CFUNC)) {
+      Id vars = cl_ary_new(b);
+      cl_ary_push(b, vars, v);
+      cl_call(b, lambda, e, vars);
+    } else {
+      if (pn.s) cl_ht_set(b, e, pn, v);
+      cl_eval(b, ca_s(lambda), e, clNil, clNil, 0);
+    }
+  }
+  return clNil;
+}
+
+Id cl_hash_each(VB, Id x) { 
   Id this = clNil;
   Id e = cl_env_new(b, env);
   Id lambda = ca_s(x);
   Id vdecl = ca_f(lambda);
   int l = cl_ary_len(b, vdecl);
-  Id pn = l > 0 ? ca_f(vdecl) : clNil;
-  int i = 0; 
-  Id v;
-  while ((v = cl_ary_iterate(b, ca_f(x), &i)).s) {
-    if (pn.s) cl_ht_set(b, e, pn, v);
+  Id pk = l > 0 ? ca_f(vdecl) : clNil;
+  Id pv = l > 1 ? ca_s(vdecl) : clNil;
+
+  cl_ht_iterate_t h;
+  h.initialized = 0;
+  cl_ht_entry_t *hr;
+  while ((hr = cl_ht_iterate(b, ca_f(x), &h))) {
+    if (pk.s) cl_ht_set(b, e, pk, hr->va_key);
+    if (pv.s) cl_ht_set(b, e, pv, hr->va_value);
     cl_eval(b, ca_s(lambda), e, clNil, clNil, 0);
   }
+  return clNil;
 }
 
 char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
@@ -354,7 +403,8 @@ char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "perf-show", "make-hash", "hash-set", "hash-get", 
     "make-array", "array-get", "array-set", "array-push", 
     "array-pop", "array-unshift", "array-len", "string-ref", 
-    "string-split", "array-each", 0};
+    "string-split", "array-each", "hash-each", 0};
+
 Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_gt, cl_lt, cl_ge, 
     cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons, cl_car, cl_cdr,
     cl_list, cl_is_list, cl_is_null, cl_is_symbol, cl_display,
@@ -362,7 +412,7 @@ Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_
     cl_make_hash, cl_hash_set, cl_hash_get, cl_make_array,
     cl_array_get, cl_array_set, cl_array_push, cl_array_pop,
     cl_array_unshift, cl_array_len, cl_string_ref, 
-    _cl_string_split, cl_array_each, 0};
+    _cl_string_split, cl_array_each, cl_hash_each, 0};
 
 void cl_add_perf_symbols(void *b) {
   S_icounter = IS("icounter");
@@ -371,7 +421,7 @@ void cl_add_perf_symbols(void *b) {
 void cl_add_globals(void *b, Id env) {
   S_if = IS("if"); S_quote = IS("quote"); S_set = IS("set!");
   S_define = IS("define"); S_lambda = IS("lambda"); S_begin = IS("begin");
-  S_globals = IS("globals");
+  S_globals = IS("globals"); S_dot = IS("."); S_regexp = IS("#/");
   int i = 0;
   while (cl_std_n[i] != 0) { cl_define_func(b, cl_std_n[i], cl_std_f[i], env); i++; }
 }
@@ -398,12 +448,29 @@ Id cl_to_string(void *b, Id exp) {
   if (CL_TYPE(exp) == CL_TYPE_SYMBOL) {
     return exp;
   }
+  if (CL_TYPE(exp) == CL_TYPE_STRING) {
+    Id s = S("\"");
+    cl_string_append(b, s, exp);
+    cl_string_append(b, s, S("\""));
+    return s;
+  }
+  if (CL_TYPE(exp) == CL_TYPE_REGEXP) {
+    Id s = S("(#/ ");
+    cl_string_append(b, s, cl_rx_match_string(b, exp));
+    cl_string_append(b, s, S(")"));
+    return s;
+  }
   if (CL_TYPE(exp) == CL_TYPE_ARRAY) {
     if (cl_ary_is_lambda(b, exp)) {
-      Id s = S("(lambda (");
-      cl_string_append(b, s, cl_ary_join_by_s(b, cl_ary_map(b, ca_f(exp), 
-          cl_to_string), S(" ")));
-      cl_string_append(b, s, S(") ("));
+      Id s = S("(lambda ");
+      Id vdecl = ca_f(exp);
+      if (CL_TYPE(vdecl) == CL_TYPE_ARRAY) {
+        cl_string_append(b, s, S("("));
+        cl_string_append(b, s, cl_ary_join_by_s(b, cl_ary_map(b, vdecl,
+            cl_to_string), S(" ")));
+        cl_string_append(b, s, S(")"));
+      } else cl_string_append(b, s, vdecl);
+      cl_string_append(b, s, S(" ("));
       cl_string_append(b, s, cl_ary_join_by_s(b, cl_ary_map(b, ca_s(exp), 
           cl_to_string), S(" ")));
       cl_string_append(b, s, S("))"));
@@ -436,6 +503,6 @@ void cl_repl(void *b, FILE *f, int interactive) {
     if (feof(f)) return;
     if (interactive) printf("=> %s\n", cl_string_ptr(cl_to_inspect(b, val)));
     cl_garbage_collect(b);
-    cl_mem_dump(b);
+    //cl_mem_dump(b);
   }
 }
