@@ -4,13 +4,13 @@
  */
 
 #define IS(s) cl_intern(S(s))
-Id S_if, S_quote, S_globals, S_set, S_define, S_lambda, S_begin,
-    S_icounter, S_dot, S_regexp;
 
 Id string_ref;
 
 Id cl_string_parse(void *b, Id s) {
+  if (!s.s) return clNil;
   Id ary = cl_string_split(b, s, '"');
+  if (!ary.s) return clNil;
   int string_mode = 0;
   Id v;
   int i = 0;
@@ -121,7 +121,7 @@ next_token:
 finish:
   if (quote) {
     Id ql = cl_ary_new(b);
-    cl_ary_push(b, ql, S_quote);
+    cl_ary_push(b, ql, cl_intern(S("quote")));
     cl_ary_push(b, ql, rv);
     rv = ql;
   }
@@ -133,11 +133,14 @@ Id cl_parse(void *b, Id va_s) {
       va_s))); 
 }
 
+Id S_icounter;
+
 void cl_perf_count(Id this) {
   if (cl_perf_mode) return;
   void *b = cl_perf;
   cl_ht_inc(b, cl_md->globals, S_icounter);
 }
+
 
 void cl_perf_show() {
   void *b = cl_perf;
@@ -172,14 +175,14 @@ tail_rc_start:
     if (cl_string_starts_with(b, x, S(":"))) {
       RETURN(cl_intern(cl_string_sub_str_new(b, x, 1, -1)));
     }
-    if (cl_equals_i(x, S_globals)) RETURN(cl_globals);
+    if (cl_string_equals_cp_i(x, "globals")) RETURN(cl_globals);
     RETURN(cl_env_find(b, env, x));
   } else if (CL_TYPE(x) != CL_TYPE_ARRAY) {
     RETURN(x); // constant literal
   } 
   if (CL_TYPE(x) == CL_TYPE_ARRAY && cl_ary_len(b, x) == 3) {
     Id m = ca_s(x);
-    if (CL_TYPE(m) == CL_TYPE_SYMBOL && cl_equals_i(m, S_dot)) {
+    if (CL_TYPE(m) == CL_TYPE_SYMBOL && cl_string_equals_cp_i(m, ".")) {
       Id a = cl_retain(clNil, cl_ary_new(b));
       cl_ary_push(b, a, cl_eval2(ca_f(x), env));
       cl_ary_push(b, a, cl_eval2(ca_th(x), env));
@@ -188,34 +191,33 @@ tail_rc_start:
     }
   }
   x0 = ca_f(x);
-  if (cl_equals_i(x0, S_quote)) {
+  if (cl_string_equals_cp_i(x0, "quote")) {
     RETURN(ca_s(x));
-  } else if (cl_equals_i(x0, S_regexp)) {
+  } else if (cl_string_equals_cp_i(x0, "/#")) {
     Id rx = cl_rx_new(cl_ary_join_by_s(b,  
-      cl_ary_clone_part(b, x, 1, -1), S(" ")));
-    //Id rx = cl_rx_new(D("ca_s", ca_s(x)));
+        cl_ary_clone_part(b, x, 1, -1), S(" ")));
     return rx;
-  } else if (cl_equals_i(x0, S_if)) { // (if test conseq alt)
+  } else if (cl_string_equals_cp_i(x0, "if")) { // (if test conseq alt)
     Id test = ca_s(x), conseq = ca_th(x), alt = ca_fth(x);
     Id t = cl_eval2(test, env);
     RETURN(cnil2(t).s ? cl_eval2(conseq, env) : cl_eval2(alt, env));
-  } else if (cl_equals_i(x0, S_set)) { // (set! var exp)
+  } else if (cl_string_equals_cp_i(x0, "set!")) { // (set! var exp)
     var = ca_s(x), exp = ca_th(x);
     cl_env_find_and_set(b, env, var, cl_eval2(exp, env));
-  } else if (cl_equals_i(x0, S_define)) { // (define var exp)
+  } else if (cl_string_equals_cp_i(x0, "define")) { // (define var exp)
     var = ca_s(x), exp = ca_th(x);
     RETURN(cl_ht_set(b, env, var, cl_eval2(exp, env)));
-  } else if (cl_equals_i(x0, S_lambda)) { //(lambda (var*) exp)
+  } else if (cl_string_equals_cp_i(x0, "lambda")) { //(lambda (var*) exp)
     Id l = cl_ary_new(b); cl_ary_set_lambda(b, l);
     cl_ary_push(b, l, ca_s(x)); 
     Id c = cl_ary_new(b);
     int i = 2;
-    cl_ary_push(b, c, S_begin);
+    cl_ary_push(b, c, cl_intern(S("begin")));
     Id v;
     while ((v = cl_ary_iterate(b, x, &i)).s) cl_ary_push(b, c, v);
     cl_ary_push(b, l, c); cl_ary_push(b, l, env);
     RETURN(l);
-  } else if (cl_equals_i(x0, S_begin)) {  // (begin exp*)
+  } else if (cl_string_equals_cp_i(x0, "begin")) {  // (begin exp*)
     RETURN(cl_begin(b, x, 1, env, this, this));
   } else {  // (proc exp*)
     Id v;
@@ -260,6 +262,10 @@ finish:
   if (rv.s == clTail.s && !cl_equals_i(this, previous)) goto tail_rc_start;
   cl_release(_env);
   nested_depth--;
+  if (rv.s == clError.s) {
+    D("clError", this);
+    exit(0);
+  }
   return rv;
 }
 
@@ -403,6 +409,20 @@ Id _cl_rx_match_string(VB, Id x) {
   return cb(cl_rx_match(b, ca_f(x), ca_s(x)));
 }
 
+void *cl_set_standard_ns = 0;
+
+Id cl_set_namespace(VB, Id x) { 
+  Id ns = ca_f(x);
+  if (cl_string_equals_cp_i(ns, "heap")) {  // (begin exp*)
+    cl_set_standard_ns = cl_heap;
+  } else if (cl_string_equals_cp_i(ns, "perf")) {
+    cl_set_standard_ns = cl_perf;
+  } else {
+    printf("Unknown namespace: '%s'\n", cl_string_ptr(cl_to_string(b, x)));
+  }
+  return clNil;
+}
+
 char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms", 
@@ -410,7 +430,7 @@ char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
     "make-array", "array-get", "array-set", "array-push", 
     "array-pop", "array-unshift", "array-len", "string-ref", 
     "string-split", "array-each", "hash-each", 
-    "rx-match-string", 0};
+    "rx-match-string", "set-namespace", 0};
 
 Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_gt, cl_lt, cl_ge, 
     cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons, cl_car, cl_cdr,
@@ -420,18 +440,20 @@ Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_
     cl_array_get, cl_array_set, cl_array_push, cl_array_pop,
     cl_array_unshift, cl_array_len, cl_string_ref, 
     _cl_string_split, cl_array_each, cl_hash_each, 
-    _cl_rx_match_string, 0};
+    _cl_rx_match_string, cl_set_namespace, 0};
+
+
+void cl_add_std_functions(void *b, Id env) {
+  int i = 0;
+  while (cl_std_n[i] != 0) { cl_define_func(b, cl_std_n[i], cl_std_f[i], env); i++; }
+}
 
 void cl_add_perf_symbols(void *b) {
   S_icounter = IS("icounter");
 }
 
 void cl_add_globals(void *b, Id env) {
-  S_if = IS("if"); S_quote = IS("quote"); S_set = IS("set!");
-  S_define = IS("define"); S_lambda = IS("lambda"); S_begin = IS("begin");
-  S_globals = IS("globals"); S_dot = IS("."); S_regexp = IS("#/");
-  int i = 0;
-  while (cl_std_n[i] != 0) { cl_define_func(b, cl_std_n[i], cl_std_f[i], env); i++; }
+  cl_add_std_functions(b, env);
 }
 
 Id cl_to_inspect(void *b, Id exp) {
@@ -498,19 +520,25 @@ Id cl_to_string(void *b, Id exp) {
   if (CL_TYPE(exp) != CL_TYPE_ARRAY) return exp;
 }
 
-void cl_repl(void *b, FILE *f, int interactive) {
+void cl_repl(void *b, FILE *f, Id filename, int interactive) {
+  cl_retain(clNil, filename);
   while (1) {
     stack_overflow = 0;
     nested_depth = 0;
-    string_ref = cl_retain(clNil, cl_ary_new(b));
-    Id parsed = cl_retain(clNil, cl_parse(b, 
+    string_ref = cl_retain(filename, cl_ary_new(b));
+    Id parsed = cl_retain(filename, cl_parse(b, 
         cl_input(b, f, interactive, cl_perf_mode ? "perf>" :  "schemejit> ")));
-    Id val = cl_eval(b, parsed, cl_globals, clNil, clNil, 1);
+    Id val = cl_eval(b, parsed, cl_globals, filename, clNil, 1);
     cl_release(parsed);
     cl_release(string_ref);
-    if (feof(f)) return;
+    if (feof(f)) break;
     if (interactive) printf("=> %s\n", cl_string_ptr(cl_to_inspect(b, val)));
     cl_garbage_collect(b);
     //cl_mem_dump(b);
+    if (cl_set_standard_ns) {
+      b = cl_set_standard_ns;
+      cl_set_standard_ns = 0;
+    }
   }
+  cl_release(filename);
 }

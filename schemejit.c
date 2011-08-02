@@ -37,8 +37,9 @@ typedef union { size_t s; struct { short int type; cl_reg_type d; } t; } Id;
 #define CL_FLOAT(va) va.t.d.f
 
 static Id clNil = {0}; 
-static Id clTrue = {0}; // This is set to 1 later
-static Id clTail = {0}; // set to 2 later
+static Id clTrue = {0};
+static Id clTail = {0};
+static Id clError = {0}; 
 
 /*
  * Basic error handling
@@ -64,7 +65,7 @@ Id cl_handle_error_with_err_string(const char *ctx,
   snprintf((char *)&cl_error.error_str, 1023, "%s%s: %s", ctx, h, error_msg);
   printf("error: %s\n", cl_error.error_str);
   cl_error.error_number = errno;
-  return clNil;
+  return clError;
 }
 
 Id cl_handle_error(int check, const char *ctx, char *handle) {
@@ -84,7 +85,7 @@ Id cl_handle_error_with_err_string_nh(const char *ctx,
 #define CL_STATIC_ALLOC_SIZE 65536
 #define CL_VAR_COUNT 100000LL
 #define CL_MEM_SIZE (size_t)(CL_VAR_COUNT * CL_STATIC_ALLOC_SIZE)
-#define CL_PERF_MEM_SIZE (size_t)(200LL * CL_STATIC_ALLOC_SIZE)
+#define CL_PERF_MEM_SIZE (size_t)(2000LL * CL_STATIC_ALLOC_SIZE)
 
 #ifdef CL_GC_DEBUG
 typedef struct {
@@ -299,6 +300,7 @@ char *cl_type_to_cp(short int t);
 int cl_perf_mode = 0;
 
 void cl_alloc_debug(void *b, char *p, short int type) {
+  return;
   if (!cl_perf_mode || b != cl_perf) return;
   char *n = b == cl_perf ? "perf" : "scheme";
   printf("[%s:%lx] alloc %lx type: %s\n", n, (size_t)b, (size_t)p, 
@@ -394,21 +396,29 @@ int cl_is_type_i(Id va, int t) { return c_type(CL_TYPE(va)) == c_type(t); }
 #define S(s) cl_string_new_c(b, s)
 
 
-#define CL_CHECK_TYPE(va, _type, r) \
+#define CL_CHECK_TYPE2(w, l, va, _type, r) \
   if (!cl_is_type_i((va), (_type))) { \
     char es[1024]; \
-    snprintf(es, 1023, "Invalid type: Expected type '%s', have: '%s'", \
+    snprintf(es, 1023, "(%s:%d) Invalid type: Expected type '%s', " \
+        "have: '%s'", \
+        w, l, \
         cl_type_to_cp((_type)), cl_type_to_cp(CL_TYPE(va)));  \
     cl_handle_error_with_err_string_nh(__FUNCTION__, es); \
     return (r); \
   }
+
+#define CL_CHECK_TYPE(va, _type, r) \
+    CL_CHECK_TYPE2(__FUNCTION__, __LINE__, va, _type, r)
 
 #define CL_CHECK_ERROR(cond,msg,r) \
   if ((cond)) { cl_handle_error_with_err_string_nh(__FUNCTION__, (msg)); return (r); }
 
 #define __CL_TYPED_VA_TO_PTR(ptr, va, type, r, check) \
   CL_CHECK_TYPE((va), (type), (r)); (ptr) = check((va)); P_0_R((ptr), (r));
+#define __CL_TYPED_VA_TO_PTR2(ptr, va, type, r, check) \
+  CL_CHECK_TYPE2(w, l, (va), (type), (r)); (ptr) = check((va)); P_0_R((ptr), (r));
 #define CL_TYPED_VA_TO_PTR(p,v,t,r) __CL_TYPED_VA_TO_PTR(p,v,t,r,VA_TO_PTR)
+#define CL_TYPED_VA_TO_PTR2(p,v,t,r) __CL_TYPED_VA_TO_PTR2(p,v,t,r,VA_TO_PTR)
 #define CL_TYPED_VA_TO_PTR0(p,v,t,r) __CL_TYPED_VA_TO_PTR(p,v,t,r,VA_TO_PTR0)
 
 /*
@@ -925,6 +935,8 @@ void cl_setup() {
   clTrue.s = 1;
   CL_TYPE(clTail) = CL_TYPE_SPECIAL;
   CL_INT(clTail)  = 1;
+  CL_TYPE(clError) = CL_TYPE_SPECIAL;
+  CL_INT(clError)  = 2;
 }
 
 char *cmd;
@@ -1121,8 +1133,10 @@ Id ca_i(void *b, Id va_ary, int i) { return cl_ary_index(b, va_ary, i); }
 #define ca_th(ary) ca_i(b, ary, 2)
 #define ca_fth(ary) ca_i(b, ary, 3)
 
-Id cl_ary_iterate(void *b, Id va_ary, int *i) {
-  ht_array_t *ary; CL_TYPED_VA_TO_PTR(ary, va_ary, CL_TYPE_ARRAY, clNil);
+#define cl_ary_iterate(b, va_ary, i) \
+  __cl_ary_iterate(__FUNCTION__, __LINE__, b, va_ary, i)
+Id __cl_ary_iterate(const char *w, int l, void *b, Id va_ary, int *i) {
+  ht_array_t *ary; CL_TYPED_VA_TO_PTR2(ary, va_ary, CL_TYPE_ARRAY, clNil);
   if (*i >= ary->size - ary->start) { return clNil; }
   return cl_ary_index(b, va_ary, (*i)++); 
 }
@@ -1272,6 +1286,14 @@ void test_atomic() {
   exit(0);
 }
 
+void cl_setup_perf() {
+  void *b = cl_perf;
+  cl_add_globals(b, cl_globals);
+  cl_add_perf_symbols(b);
+  FILE* fb = fopen("boot.scm", "r");
+  cl_repl(b, fb, S("boot.scm"), 0);
+}
+
 
 int main(int argc, char **argv) {
   cl_setup();
@@ -1303,9 +1325,9 @@ int main(int argc, char **argv) {
   else { printf("failed to create perf segment!\n"); exit(1); }
   int r = cl_init_memory(cl_perf, CL_PERF_MEM_SIZE);
   if (r == 2) exit(1);
-  cl_add_perf_symbols(cl_perf);
+  if (r) cl_setup_perf();
   FILE* fb = fopen("boot.scm", "r");
-  cl_repl(b, fb, 0);
-  cl_repl(b, fin, cl_interactive);
+  cl_repl(b, fb, S("boot.scm"), 0);
+  cl_repl(b, fin, S(scm_filename), cl_interactive);
   return 0;
 }
