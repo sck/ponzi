@@ -23,3 +23,8 @@
   (array-each array (lambda (v)
     (if (rx-match-string rx v) (array-push a v) 0)))
   a))
+
+(define test-parallel-write (lambda (n) 
+  (times n (lambda (n) (hash-set h (rand 20) (rand 20))))))
+
+(define tpw test-parallel-write)

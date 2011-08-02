@@ -264,7 +264,6 @@ finish:
   nested_depth--;
   if (rv.s == clError.s) {
     D("clError", this);
-    exit(0);
   }
   return rv;
 }
@@ -322,7 +321,6 @@ Id cl_add(VB, Id x) { ON_I r = cl_int(ai + bi) ON_F r = cl_float(af + bf) R }
 Id cl_sub(VB, Id x) { ON_I r = cl_int(ai - bi) ON_F r = cl_float(af - bf) R }
 Id cl_mul(VB, Id x) { ON_I r = cl_int(ai * bi) ON_F r = cl_float(af * bf) R }
 Id cl_div(VB, Id x) { ON_I r = cl_int(ai / bi) ON_F r = cl_float(af / bf) R }
-Id cl_not(VB, Id x) { ON_I r = cl_int(ai ^ bi) R }
 Id cl_gt(VB, Id x) { ON_I r = cb(ai > bi) ON_F r = cb(af > bf) R }
 Id cl_lt(VB, Id x) { ON_I r = cb(ai < bi) ON_F r = cb(af < bf) R }
 Id cl_ge(VB, Id x) { ON_I r = cb(ai >= bi) ON_F r = cb(af >= bf) R }
@@ -423,16 +421,33 @@ Id cl_set_namespace(VB, Id x) {
   return clNil;
 }
 
-char *cl_std_n[] = {"+", "-", "*", "/", "not", ">", "<", ">=", "<=", "=",
+Id cl_rand(VB, Id x) {
+  Id n = ca_f(x);
+  if (!n.s) n = cl_int(1 << 16);
+  return cl_int(rand() % CL_INT(n));
+}
+
+Id cl_shl(VB, Id x) { return cl_int(CL_INT(ca_f(x)) << CL_INT(ca_s(x))); }
+Id cl_shr(VB, Id x) { return cl_int(CL_INT(ca_f(x)) >> CL_INT(ca_s(x))); }
+Id cl_and(VB, Id x) { return cb(!cnil(ca_f(x)) && !cnil(ca_s(x))); }
+Id cl_or(VB, Id x) { return cb(!cnil(ca_f(x)) || !cnil(ca_s(x))); }
+Id cl_not(VB, Id x) { return cb(cnil(ca_f(x))); }
+
+Id cl_sleep(VB, Id x) { 
+    ON_I usleep((size_t)ai * 1000000)
+    ON_F usleep((size_t)(af * 1000000.0)) R }
+
+char *cl_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms", 
     "perf-show", "make-hash", "hash-set", "hash-get", 
     "make-array", "array-get", "array-set", "array-push", 
     "array-pop", "array-unshift", "array-len", "string-ref", 
     "string-split", "array-each", "hash-each", 
-    "rx-match-string", "set-namespace", 0};
+    "rx-match-string", "set-namespace", "rand", 
+    "<<", ">>", "and", "or", "not", "sleep", 0};
 
-Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_gt, cl_lt, cl_ge, 
+Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_gt, cl_lt, cl_ge, 
     cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons, cl_car, cl_cdr,
     cl_list, cl_is_list, cl_is_null, cl_is_symbol, cl_display,
     cl_newline, cl_resetline, cl_current_ms, __cl_perf_show, 
@@ -440,7 +455,8 @@ Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_not, cl_
     cl_array_get, cl_array_set, cl_array_push, cl_array_pop,
     cl_array_unshift, cl_array_len, cl_string_ref, 
     _cl_string_split, cl_array_each, cl_hash_each, 
-    _cl_rx_match_string, cl_set_namespace, 0};
+    _cl_rx_match_string, cl_set_namespace, cl_rand,
+    cl_shl, cl_shr, cl_and, cl_or, cl_not, cl_sleep, 0};
 
 
 void cl_add_std_functions(void *b, Id env) {
