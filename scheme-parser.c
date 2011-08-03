@@ -429,9 +429,14 @@ Id cl_rand(VB, Id x) {
 
 Id cl_shl(VB, Id x) { return cl_int(CL_INT(ca_f(x)) << CL_INT(ca_s(x))); }
 Id cl_shr(VB, Id x) { return cl_int(CL_INT(ca_f(x)) >> CL_INT(ca_s(x))); }
+Id cl_b_or(VB, Id x) { return cl_int(CL_INT(ca_f(x)) | CL_INT(ca_s(x))); }
+Id cl_b_and(VB, Id x) { return cl_int(CL_INT(ca_f(x)) & CL_INT(ca_s(x))); }
+Id cl_b_xor(VB, Id x) { return cl_int(CL_INT(ca_f(x)) ^ CL_INT(ca_s(x))); }
+
 Id cl_and(VB, Id x) { return cb(!cnil(ca_f(x)) && !cnil(ca_s(x))); }
 Id cl_or(VB, Id x) { return cb(!cnil(ca_f(x)) || !cnil(ca_s(x))); }
 Id cl_not(VB, Id x) { return cb(cnil(ca_f(x))); }
+
 
 Id cl_sleep(VB, Id x) { 
     ON_I usleep((size_t)ai * 1000000)
@@ -440,23 +445,22 @@ Id cl_sleep(VB, Id x) {
 char *cl_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms", 
-    "perf-show", "make-hash", "hash-set", "hash-get", 
-    "make-array", "array-get", "array-set", "array-push", 
-    "array-pop", "array-unshift", "array-len", "string-ref", 
-    "string-split", "array-each", "hash-each", 
-    "rx-match-string", "set-namespace", "rand", 
-    "<<", ">>", "and", "or", "not", "sleep", 0};
+    "perf-show", "make-hash", "hash-set", "hash-get", "make-array",
+    "array-get", "array-set", "array-push", "array-pop", "array-unshift",
+    "array-len", "string-ref", "string-split", "array-each", "hash-each",
+    "rx-match-string", "set-namespace", "rand", "<<", ">>", "and", "or",
+    "not", "sleep", "|", "&", "^", 0};
 
-Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, cl_gt, cl_lt, cl_ge, 
-    cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons, cl_car, cl_cdr,
-    cl_list, cl_is_list, cl_is_null, cl_is_symbol, cl_display,
-    cl_newline, cl_resetline, cl_current_ms, __cl_perf_show, 
-    cl_make_hash, cl_hash_set, cl_hash_get, cl_make_array,
-    cl_array_get, cl_array_set, cl_array_push, cl_array_pop,
-    cl_array_unshift, cl_array_len, cl_string_ref, 
-    _cl_string_split, cl_array_each, cl_hash_each, 
-    _cl_rx_match_string, cl_set_namespace, cl_rand,
-    cl_shl, cl_shr, cl_and, cl_or, cl_not, cl_sleep, 0};
+Id (*cl_std_f[])(void *b, Id, Id) = {cl_add, cl_sub, cl_mul, cl_div, 
+    cl_gt, cl_lt, cl_ge, cl_le, cl_eq, cl_eq, cl_eq, cl_length, cl_cons,
+    cl_car, cl_cdr, cl_list, cl_is_list, cl_is_null, cl_is_symbol,
+    cl_display, cl_newline, cl_resetline, cl_current_ms, __cl_perf_show,
+    cl_make_hash, cl_hash_set, cl_hash_get, cl_make_array, cl_array_get,
+    cl_array_set, cl_array_push, cl_array_pop, cl_array_unshift,
+    cl_array_len, cl_string_ref, _cl_string_split, cl_array_each,
+    cl_hash_each, _cl_rx_match_string, cl_set_namespace, cl_rand, cl_shl,
+    cl_shr, cl_and, cl_or, cl_not, cl_sleep, cl_b_or, cl_b_and,
+    cl_b_xor, 0};
 
 
 void cl_add_std_functions(void *b, Id env) {
