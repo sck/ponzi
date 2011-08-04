@@ -10,7 +10,7 @@
 //   __o;                                                          \
 //})
 
-inline size_t cl_atomic_cas(volatile size_t *v, size_t new, size_t old) {
+inline size_t sj_atomic_cas(volatile size_t *v, size_t new, size_t old) {
   size_t before;
   __asm__ __volatile__("lock; cmpxchgq %1,%2"
       : "=a" (before)
@@ -20,7 +20,7 @@ inline size_t cl_atomic_cas(volatile size_t *v, size_t new, size_t old) {
 }
 
 
-inline size_t cl_atomic_add(size_t* v, size_t add)
+inline size_t sj_atomic_add(size_t* v, size_t add)
 {
   __asm__ __volatile__("lock xadd %0,%1"
                : "=r" (add), "=m" (*v)
@@ -29,4 +29,4 @@ inline size_t cl_atomic_add(size_t* v, size_t add)
   return add;
 }
 
-size_t cl_atomic_inc(size_t* v) { return cl_atomic_add(v, 1); }
+size_t sj_atomic_inc(size_t* v) { return sj_atomic_add(v, 1); }
