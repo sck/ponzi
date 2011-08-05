@@ -83,7 +83,7 @@ Id sj_atom(void *b, Id token) {
   if (ep && *ep == '\0') return sj_int((int)l);
   float f = strtof(dt.s, &ep);
   if (ep && *ep == '\0') return sj_float(f);
-  return sj_intern(token);
+  return sj_intern(sj_to_symbol(token));
 }
 
 #define RETURN(v) { rv = v; goto finish; }
@@ -151,12 +151,13 @@ void sj_perf_show() {
 
 #define DC2B(va) sj_deep_copy(b, sj_perf, va)
 #define DC2P(va) sj_deep_copy(sj_perf, b, va)
-#define sj_eval2(x, e) sj_eval(b, x, e, this, this, 1)
+#define sj_eval2(x, e, l) sj_eval(b, x, e, this, this, l)
 size_t nested_depth = 0;
 size_t stack_overflow = 0;
 size_t rc_count = 0;
 Id sj_begin(void *b, Id x, int start, Id _env, Id this, Id previous);
 Id sj_eval(void *b, Id x, Id _env, Id this, Id previous, int last) {
+  //printf("sj_eval: %s %d\n", sj_string_ptr(this), last);
   Id x0, exp, val, var, vars, rv, env;
   nested_depth++;
   if (stack_overflow) return sjNil;
@@ -174,7 +175,7 @@ tail_rc_start:
   env = (_env.s ? _env : sj_globals);
   if (SJ_TYPE(x) == SJ_TYPE_SYMBOL) {
     if (sj_string_starts_with(b, x, S(":"))) {
-      RETURN(sj_intern(sj_string_sub_str_new(b, x, 1, -1)));
+      RETURN(sj_intern(sj_to_symbol(sj_string_sub_str_new(b, x, 1, -1))));
     }
     if (sj_string_equals_cp_i(x, "globals")) RETURN(sj_globals);
     RETURN(sj_env_find(b, env, x));
@@ -185,8 +186,8 @@ tail_rc_start:
     Id m = ca_s(x);
     if (SJ_TYPE(m) == SJ_TYPE_SYMBOL && sj_string_equals_cp_i(m, ".")) {
       Id a = sj_retain(sjNil, sj_ary_new(b));
-      sj_ary_push(b, a, sj_eval2(ca_f(x), env));
-      sj_ary_push(b, a, sj_eval2(ca_th(x), env));
+      sj_ary_push(b, a, sj_eval2(ca_f(x), env, 0));
+      sj_ary_push(b, a, sj_eval2(ca_th(x), env, 1));
       sj_release(a);
       RETURN(a);
     }
@@ -194,26 +195,26 @@ tail_rc_start:
   x0 = ca_f(x);
   if (sj_string_equals_cp_i(x0, "quote")) {
     RETURN(ca_s(x));
-  } else if (sj_string_equals_cp_i(x0, "/#")) {
+  } else if (sj_string_equals_cp_i(x0, "/#")) { // (/# ^regexp$)
     Id rx = sj_rx_new(sj_ary_join_by_s(b,  
         sj_ary_clone_part(b, x, 1, -1), S(" ")));
     return rx;
   } else if (sj_string_equals_cp_i(x0, "if")) { // (if test conseq alt)
     Id test = ca_s(x), conseq = ca_th(x), alt = ca_fth(x);
-    Id t = sj_eval2(test, env);
-    RETURN(cnil2(t).s ? sj_eval2(conseq, env) : sj_eval2(alt, env));
+    Id t = sj_eval2(test, env, 0);
+    RETURN(cnil2(t).s ? sj_eval2(conseq, env, 1) : sj_eval2(alt, env, 1));
   } else if (sj_string_equals_cp_i(x0, "set!")) { // (set! var exp)
     var = ca_s(x), exp = ca_th(x);
-    sj_env_find_and_set(b, env, var, sj_eval2(exp, env));
+    sj_env_find_and_set(b, env, var, sj_eval2(exp, env, 0));
   } else if (sj_string_equals_cp_i(x0, "define")) { // (define var exp)
     var = ca_s(x), exp = ca_th(x);
-    RETURN(sj_ht_set(b, env, var, sj_eval2(exp, env)));
+    RETURN(sj_ht_set(b, env, var, sj_eval2(exp, env, 1)));
   } else if (sj_string_equals_cp_i(x0, "lambda")) { //(lambda (var*) exp)
     Id l = sj_ary_new(b); sj_ary_set_lambda(b, l);
     sj_ary_push(b, l, ca_s(x)); 
     Id c = sj_ary_new(b);
     int i = 2;
-    sj_ary_push(b, c, sj_intern(S("begin")));
+    sj_ary_push(b, c, sj_intern(sj_to_symbol(S("begin"))));
     Id v;
     while ((v = sj_ary_iterate(b, x, &i)).s) sj_ary_push(b, c, v);
     sj_ary_push(b, l, c); sj_ary_push(b, l, env);
@@ -230,12 +231,13 @@ tail_rc_start:
     vars = sj_retain(sjNil, sj_ary_new(b));
     int i = 1;
     while ((v = sj_ary_iterate(b, x, &i)).s) 
-        sj_ary_push(b, vars, sj_eval2(v, env));
+        sj_ary_push(b, vars, sj_eval2(v, env, 0));
     func_name = x0;
     Id lambda = sj_env_find(b, env, func_name);
+    //D("func_name", func_name);
     if (!lambda.s) { 
       RETURN(sj_handle_error_with_err_string(__FUNCTION__, "Unknown proc", 
-          sj_string_ptr(func_name))); 
+          sj_string_ptr(sj_to_string(b, func_name)))); 
     }
     if (sj_is_type_i(lambda, SJ_TYPE_CFUNC)) {
       RETURN(sj_call(b, lambda, env, vars));
@@ -265,12 +267,10 @@ tail_rc_start:
 
 finish:
   sj_release(vars);
-  if (rv.s == sjTail.s && !sj_equals_i(this, previous)) goto tail_rc_start;
+  if (rv.s == sjTail.s && !sj_equals_i(this, previous)) { goto tail_rc_start; }
   sj_release(_env);
   nested_depth--;
-  if (rv.s == sjError.s) {
-    D("sjError", this);
-  }
+  if (rv.s == sjError.s) { D("sjError", this); }
   return rv;
 }
 
@@ -442,6 +442,9 @@ Id sj_sleep(VB, Id x) {
     ON_I usleep((size_t)ai * 1000000)
     ON_F usleep((size_t)(af * 1000000.0)) R }
 
+Id sj_type(VB, Id x) { return S(sj_type_to_cp(SJ_TYPE(ca_f(x)))); }
+    
+
 char *sj_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms",
@@ -449,7 +452,7 @@ char *sj_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "array-get", "array-set", "array-push", "array-pop", "array-unshift",
     "array-len", "string-ref", "string-split", "array-each", "hash-each",
     "rx-match-string", "rand", "<<", ">>", "and", "or", "not", "sleep",
-    "|", "&", "^", 0};
+    "|", "&", "^", "type", 0};
 
 Id (*sj_std_f[])(void *b, Id, Id) = {sj_add, sj_sub, sj_mul, sj_div, 
     sj_gt, sj_lt, sj_ge, sj_le, sj_eq, sj_eq, sj_eq, sj_length, sj_cons,
@@ -459,11 +462,10 @@ Id (*sj_std_f[])(void *b, Id, Id) = {sj_add, sj_sub, sj_mul, sj_div,
     sj_array_set, sj_array_push, sj_array_pop, sj_array_unshift,
     sj_array_len, sj_string_ref, _sj_string_split, sj_array_each,
     sj_hash_each, _sj_rx_match_string, sj_rand, sj_shl, sj_shr, sj_and,
-    sj_or, sj_not, sj_sleep, sj_b_or, sj_b_and, sj_b_xor, 0};
+    sj_or, sj_not, sj_sleep, sj_b_or, sj_b_and, sj_b_xor, sj_type, 0};
 
 
 void sj_add_std_functions(void *b, Id env) {
-  D("env", env);
   int i = 0;
   while (sj_std_n[i] != 0) { sj_define_func(b, sj_std_n[i], sj_std_f[i], env); i++; }
 }
@@ -485,9 +487,10 @@ Id sj_to_inspect(void *b, Id exp) {
 }
 
 Id sj_to_string(void *b, Id exp) {
-  if (SJ_TYPE(exp) == SJ_TYPE_BOOL) { return S(exp.s ? "true" : "null"); }
+  int t = SJ_TYPE(exp);
+  if (t == SJ_TYPE_BOOL) { return S(exp.s ? "true" : "null"); }
   if (sj_is_number(exp)) return sj_string_new_number(b, exp);
-  if (SJ_TYPE(exp) == SJ_TYPE_CFUNC) { 
+  if (t == SJ_TYPE_CFUNC) { 
     Id s = S("CFUNC<");
     sj_cfunc_t *cf; SJ_TYPED_VA_TO_PTR(cf, exp, SJ_TYPE_CFUNC, sjNil);
     sj_string_append(b, s, sj_string_new_hex_number(b, 
@@ -495,14 +498,20 @@ Id sj_to_string(void *b, Id exp) {
     sj_string_append(b, s, S(">"));
     return s;
   }
+  Id st = sj_string_new_0(b);
+  if ((t == SJ_TYPE_SYMBOL || t == SJ_TYPE_STRING) &&
+      sj_is_interned(b, exp)) sj_string_append(b, st, S("<I>"));
+
   if (SJ_TYPE(exp) == SJ_TYPE_SYMBOL) {
-    return exp;
+    sj_string_append(b, st, S(":"));
+    sj_string_append(b, st, exp);
+    return st;
   }
   if (SJ_TYPE(exp) == SJ_TYPE_STRING) {
-    Id s = S("\"");
-    sj_string_append(b, s, exp);
-    sj_string_append(b, s, S("\""));
-    return s;
+    sj_string_append(b, st, S("\""));
+    sj_string_append(b, st, exp);
+    sj_string_append(b, st, S("\""));
+    return st;
   }
   if (SJ_TYPE(exp) == SJ_TYPE_REGEXP) {
     Id s = S("(#/ ");
@@ -552,7 +561,7 @@ void sj_repl(void *b, FILE *f, Id filename, int interactive) {
     sj_release(parsed);
     sj_release(string_ref);
     if (feof(f)) break;
-    if (interactive) printf("=> %s\n", sj_string_ptr(sj_to_inspect(b, val)));
+    if (interactive) printf("===> %s\n", sj_string_ptr(sj_to_inspect(b, val)));
     sj_garbage_collect_full(b);
     //sj_mem_dump(b);
   }

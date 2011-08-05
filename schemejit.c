@@ -16,6 +16,14 @@
 
 #include "atomic.c"
 
+#if 1
+#define CDS(w, va) printf("%s %lx %x %s %s\n", w, (size_t)b, SJ_ADR(va), sj_type_to_cp(SJ_TYPE(va)), sj_string_ptr(va));
+#define CDS2(w, va_h, va) printf("%s %lx %x %x %s %s\n", w, (size_t)b, SJ_ADR(va_h), SJ_ADR(va), sj_type_to_cp(SJ_TYPE(va)), sj_string_ptr(va));
+#else
+#define CDS(w, va) 
+#define CDS2(w, va_h, va)
+#endif
+
 #define SJ_VERSION "0.0.1"
 #define SJ_GC_DEBUG 
 
@@ -193,7 +201,8 @@ typedef struct {
   size_t total_size;
   int magic;
   int version;
-  Id interns;
+  Id symbol_interns;
+  Id string_interns;
   Id globals;
 } sj_mem_descriptor_t;
 
@@ -203,8 +212,8 @@ typedef struct {
   size_t size;
 } sj_mem_chunk_descriptor_t;
 
-size_t sj_header_size() { return SJ_STATIC_ALLOC_SIZE * 3; }
-Id sj_header_size_ssa() { Id a; SJ_ADR(a) = 3; return a; }
+size_t sj_header_size() { return SJ_STATIC_ALLOC_SIZE * 4; }
+Id sj_header_size_ssa() { Id a; SJ_ADR(a) = 4; return a; }
 #define sj_md __sj_md(b)
 void *sj_heap = 0;
 void *sj_perf = 0;
@@ -266,15 +275,23 @@ int sj_init_memory(void *b, size_t size) {
     c->next.s = 0;
     c->size = s;
 
-    SJ_ADR(sj_md->interns) = 1;
-    SJ_TYPE(sj_md->interns) = SJ_TYPE_HASH; 
+    SJ_ADR(sj_md->symbol_interns) = 1;
+    SJ_TYPE(sj_md->symbol_interns) = SJ_TYPE_HASH; 
 #ifdef SJ_GC_DEBUG
-    __sj_retain(__FUNCTION__, __LINE__, b, sjNil, sj_md->interns);
+    __sj_retain(__FUNCTION__, __LINE__, b, sjNil, sj_md->symbol_interns);
 #else
-    __sj_retain(b, sj_md->interns);
+    __sj_retain(b, sj_md->symbol_interns);
 #endif
 
-    SJ_ADR(sj_md->globals) = 2;
+    SJ_ADR(sj_md->string_interns) = 2;
+    SJ_TYPE(sj_md->string_interns) = SJ_TYPE_HASH; 
+#ifdef SJ_GC_DEBUG
+    __sj_retain(__FUNCTION__, __LINE__, b, sjNil, sj_md->string_interns);
+#else
+    __sj_retain(b, sj_md->string_interns);
+#endif
+
+    SJ_ADR(sj_md->globals) = 3;
     SJ_TYPE(sj_md->globals) = SJ_TYPE_HASH; 
 #ifdef SJ_GC_DEBUG
     __sj_retain(__FUNCTION__, __LINE__, b, sjNil, sj_md->globals);
@@ -712,6 +729,13 @@ int __sj_equals_i(void *b, Id a, Id o) {
   return cnil2(a).s == cnil2(o).s;
 }
 
+Id sj_to_symbol(Id va_s) {
+  if (SJ_TYPE(va_s) == SJ_TYPE_SYMBOL) return va_s;
+  if (SJ_TYPE(va_s) != SJ_TYPE_STRING) return sjNil;
+  Id s = va_s;
+  SJ_TYPE(s) = SJ_TYPE_SYMBOL;
+  return s;
+}
 
 /*
  * Hashtable
@@ -819,6 +843,8 @@ next_pair:
   h->va_hr = h->hr->va_next; 
   if (!h->va_hr.s) { h->k++; goto next_bucket; }
 return_hr:
+  //CDS("sjNil", sjNil);
+  //CDS("va_hr", h->va_hr);
   SJ_TYPED_VA_TO_PTR(h->hr, h->va_hr, SJ_TYPE_HASH_PAIR, 0); 
   if (!h->hr) goto next_pair;
   return h->hr;
@@ -840,6 +866,7 @@ Id sj_ht_map(void *b, Id va_ht, Id (*func_ptr)(void *b, Id)) {
 }
 
 Id sj_ht_get(void *b, Id va_ht, Id va_key) { 
+  //CDS2("get", va_ht, va_key);
   sj_ht_entry_t *hr; sj_ht_lookup(b, &hr, va_ht, va_key);  P_0_R(hr, sjNil);
   return hr->va_value;
 }
@@ -848,6 +875,7 @@ Id sj_ht_get(void *b, Id va_ht, Id va_key) {
   __sj_ht_set(__FUNCTION__, __LINE__, b, va_ht, va_key, va_value)
 Id __sj_ht_set(const char *where, int line, void *b, Id va_ht, Id va_key, 
     Id va_value) {
+  //CDS2("set", va_ht, va_key);
 //set_new_entry_failed:
   sj_hash_t *ht; SJ_TYPED_VA_TO_PTR(ht, va_ht, SJ_TYPE_HASH, sjNil);
   sj_ht_entry_t *hr; sj_ht_lookup(b, &hr, va_ht, va_key);
@@ -895,21 +923,36 @@ Id sj_ht_inc(void *b, Id va_ht, Id va_key) {
   return sj_ht_set(b, va_ht, va_key, sj_int(SJ_INT(v) + 1));
 }
 
-#define sj_interns sj_md->interns
+#define sj_symbol_interns sj_md->symbol_interns
+#define sj_string_interns sj_md->string_interns
 #define sj_globals sj_md->globals
 
 #define sj_intern(s) __sj_intern(b, s)
-Id __sj_intern(void *b, Id va_s) { 
+Id ___sj_intern(void *b, Id va_s) { 
   //if (SJ_TYPE(va_s) == SJ_TYPE_SYMBOL) SJ_TYPE(va_s) = SJ_TYPE_STRING;
-  Id va = sj_ht_get(b, sj_interns, va_s); 
+  Id dict = SJ_TYPE(va_s) == SJ_TYPE_SYMBOL ? 
+      sj_symbol_interns : sj_string_interns;
+  Id sv = va_s; SJ_TYPE(sv) = SJ_TYPE_STRING;
+  Id va = sj_ht_get(b, dict, sv); 
   if (va.s) { return va; }
   //Id va_sym = va_s; SJ_TYPE(va_sym) = SJ_TYPE_SYMBOL;
-  if (cnil(sj_ht_set(b, sj_interns, va_s, va_s))) return sjNil;
-  return sj_ht_get(b, sj_interns, va_s); 
+  if (cnil(sj_ht_set(b, dict, sv, va_s))) return sjNil;
+  return sj_ht_get(b, dict, sv); 
 }
 
+Id __sj_intern(void *b, Id va_s) { 
+  //CDS("intern <- ", va_s);
+  Id r = ___sj_intern(b, va_s);
+  //CDS("intern -> ", r);
+  return r;
+}
+
+
 int sj_is_interned(void *b, Id va_s) {
-  return sj_ht_get(b, sj_interns, va_s).s != 0; 
+  Id dict = SJ_TYPE(va_s) == SJ_TYPE_SYMBOL ? 
+      sj_symbol_interns : sj_string_interns;
+  Id sv = va_s; SJ_TYPE(sv) = SJ_TYPE_STRING;
+  return sj_ht_get(b, dict, sv).s != 0; 
 }
 
 Id sj_env_new(void *b, Id va_ht_parent) {
@@ -975,7 +1018,7 @@ Id sj_define_func(void *b, char *name, Id (*p)(void *b, Id, Id), Id env) {
   Id va_f; SJ_ALLOC(va_f, SJ_TYPE_CFUNC);
   sj_cfunc_t *cf; SJ_TYPED_VA_TO_PTR0(cf, va_f, SJ_TYPE_CFUNC, sjNil);
   cf->func_ptr = p;
-  sj_ht_set(b, env, sj_intern(S(name)), va_f);
+  sj_ht_set(b, env, sj_intern(sj_to_symbol(S(name))), va_f);
   return sjTrue;
 }
 
@@ -1192,6 +1235,11 @@ Id sj_string_split2(void *b, Id va_s, Id sep) {
 
 /*
  * regular expressions
+ *
+ * Implementation heavily borrows from Rob Pike's regexp implementation,
+ * as described here:
+ *
+ * http://www.cs.princeton.edu/courses/archive/spr09/cos333/beautiful.html
  */
 
 #define SJ_ARY_MAX_ENTRIES ((SJ_CELL_SIZE - sizeof(Id)) / sizeof(Id))
@@ -1264,7 +1312,7 @@ Id sj_deep_copy(void *b, void *source_b, Id va_s);
 Id sj_generic_deep_copy(void *b, void *source_b, Id va_s) {
   char *s; int type;
   { void *b = source_b; s = VA_TO_PTR0(va_s); P_0_R(s, sjNil); 
-    type = SJ_TYPE(va_s);}
+      type = SJ_TYPE(va_s); }
   Id va; SJ_ALLOC(va, type);
   char *p = VA_TO_PTR0(va); P_0_R(p, sjNil); 
   memcpy(p, s, SJ_CELL_SIZE);
@@ -1315,6 +1363,17 @@ Id sj_rx_deep_copy(void *b, void *source_b, Id va_s) {
   return va_rx; 
 }
 
+Id sj_string_deep_copy(void *b, void *source_b, Id va_s) {
+  char *s; int l, t, interned = 0;
+  {void *b = source_b;  SJ_ACQUIRE_STR_D(dt, va_s, sjNil);
+      l = dt.l; s = dt.s; t = SJ_TYPE(va_s); 
+      interned = sj_is_interned(b, va_s); }
+  Id va; SJ_ALLOC(va, SJ_TYPE_STRING);
+  if (l > 0 && !sj_strdup(b, va, s, l)) return sjNil;
+  SJ_TYPE(va) = t;
+  return interned ? sj_intern(va) : va;
+}
+
 Id sj_deep_copy(void *b, void *source_b, Id va_s) { 
   if (!va_s.s || va_s.t.type < 3) { return va_s; }; 
   switch (SJ_TYPE(va_s)) {
@@ -1322,6 +1381,8 @@ Id sj_deep_copy(void *b, void *source_b, Id va_s) {
     case SJ_TYPE_HASH: return sj_ht_deep_copy(b, source_b, va_s); break;
     case SJ_TYPE_HASH_PAIR: /* ignore: will always be copied by hash */; break;
     case SJ_TYPE_REGEXP: return sj_rx_deep_copy(b, source_b, va_s); break; 
+    case SJ_TYPE_STRING: case SJ_TYPE_SYMBOL: 
+        return sj_string_deep_copy(b, source_b, va_s); break;
     default: return sj_generic_deep_copy(b, source_b, va_s); break;
   }
   return sjNil;
@@ -1377,7 +1438,6 @@ void test_atomic() {
 
 void test_perf() {
   void *b = sj_perf;
-  D("perf", sj_int(1));
   return;
   Id s;
   {void *b = sj_perf; s = S("foo");}

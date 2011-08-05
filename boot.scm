@@ -28,3 +28,15 @@
   (times n (lambda (n) (hash-set h (rand 20) (rand 20))))))
 
 (define tpw test-parallel-write)
+
+(define fib-memo (make-hash))
+(define fib (lambda (n) (if (hash-get fib-memo n) (hash-get fib-memo n) (hash-set fib-memo n (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))))
+
+(define m (lambda (n l) 
+  (begin 
+    (set! before (current-ms)) 
+    (times n l) 
+    (newline)
+    (display (- (current-ms) before)) 
+    (puts (quote ms)))))
+
