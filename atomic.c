@@ -10,7 +10,7 @@
 //   __o;                                                          \
 //})
 
-inline size_t sj_atomic_casq(volatile size_t *v, size_t new, size_t old) {
+inline size_t pz_atomic_casq(volatile size_t *v, size_t new, size_t old) {
   size_t before;
   __asm__ __volatile__("lock; cmpxchgq %1,%2"
       : "=a" (before)
@@ -19,7 +19,7 @@ inline size_t sj_atomic_casq(volatile size_t *v, size_t new, size_t old) {
   return before;
 }
 
-inline int sj_atomic_casl(volatile int *v, int new, int old) {
+inline int pz_atomic_casl(volatile int *v, int new, int old) {
   int before;
   __asm__ __volatile__("lock; cmpxchgl %1,%2"
       : "=a" (before)
@@ -29,7 +29,7 @@ inline int sj_atomic_casl(volatile int *v, int new, int old) {
 }
 
 
-inline size_t sj_atomic_add(size_t* v, size_t add)
+inline size_t pz_atomic_add(size_t* v, size_t add)
 {
   __asm__ __volatile__("lock xadd %0,%1"
                : "=r" (add), "=m" (*v)
@@ -38,7 +38,7 @@ inline size_t sj_atomic_add(size_t* v, size_t add)
   return add;
 }
 
-inline size_t sj_atomic_sub(size_t* v, size_t sub) { 
-    return sj_atomic_add(v, -sub); }
+inline size_t pz_atomic_sub(size_t* v, size_t sub) { 
+    return pz_atomic_add(v, -sub); }
 
-size_t sj_atomic_inc(size_t* v) { return sj_atomic_add(v, 1); }
+size_t pz_atomic_inc(size_t* v) { return pz_atomic_add(v, 1); }
