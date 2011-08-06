@@ -1,7 +1,7 @@
 (define puts (lambda xs (array-each xs display) (newline)))
 (define #hash (lambda xs 
     (define h (make-hash)) 
-    (array-each xs (lambda (v) (hash-set h (car v) (cdr v))))
+    (array-each xs (lambda (v) (hash-set! h (car v) (cdr v))))
     h))
 (define first car)
 (define last cdr)
@@ -25,12 +25,12 @@
   a))
 
 (define test-parallel-write (lambda (n) 
-  (times n (lambda (n) (hash-set h (rand 20) (rand 20))))))
+  (times n (lambda (n) (hash-set! h (rand 20) (rand 20))))))
 
 (define tpw test-parallel-write)
 
 (define fib-memo (make-hash))
-(define fib (lambda (n) (if (hash-get fib-memo n) (hash-get fib-memo n) (hash-set fib-memo n (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))))
+(define fib (lambda (n) (if (hash-get fib-memo n) (hash-get fib-memo n) (hash-set! fib-memo n (if (< n 2) n (+ (fib (- n 1)) (fib (- n 2))))))))
 
 (define m (lambda (n l) 
   (begin 

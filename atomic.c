@@ -10,9 +10,18 @@
 //   __o;                                                          \
 //})
 
-inline size_t sj_atomic_cas(volatile size_t *v, size_t new, size_t old) {
+inline size_t sj_atomic_casq(volatile size_t *v, size_t new, size_t old) {
   size_t before;
   __asm__ __volatile__("lock; cmpxchgq %1,%2"
+      : "=a" (before)
+      : "q" (new), "m"(*(volatile long long*)(v)), "0" (old)
+      : "memory");
+  return before;
+}
+
+inline int sj_atomic_casl(volatile int *v, int new, int old) {
+  int before;
+  __asm__ __volatile__("lock; cmpxchgl %1,%2"
       : "=a" (before)
       : "q" (new), "m"(*(volatile long long*)(v)), "0" (old)
       : "memory");
@@ -28,5 +37,8 @@ inline size_t sj_atomic_add(size_t* v, size_t add)
                : "memory");
   return add;
 }
+
+inline size_t sj_atomic_sub(size_t* v, size_t sub) { 
+    return sj_atomic_add(v, -sub); }
 
 size_t sj_atomic_inc(size_t* v) { return sj_atomic_add(v, 1); }

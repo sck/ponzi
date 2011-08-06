@@ -442,17 +442,16 @@ Id sj_sleep(VB, Id x) {
     ON_I usleep((size_t)ai * 1000000)
     ON_F usleep((size_t)(af * 1000000.0)) R }
 
-Id sj_type(VB, Id x) { return S(sj_type_to_cp(SJ_TYPE(ca_f(x)))); }
-    
+Id sj_type_of(VB, Id x) { return S(sj_type_to_cp(SJ_TYPE(ca_f(x)))); }
 
 char *sj_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms",
-    "perf-show", "make-hash", "hash-set", "hash-get", "make-array",
-    "array-get", "array-set", "array-push", "array-pop", "array-unshift",
+    "perf-show", "make-hash", "hash-set!", "hash-get", "make-array",
+    "array-get", "array-set!", "array-push", "array-pop", "array-unshift",
     "array-len", "string-ref", "string-split", "array-each", "hash-each",
     "rx-match-string", "rand", "<<", ">>", "and", "or", "not", "sleep",
-    "|", "&", "^", "type", 0};
+    "|", "&", "^", "type-of", 0};
 
 Id (*sj_std_f[])(void *b, Id, Id) = {sj_add, sj_sub, sj_mul, sj_div, 
     sj_gt, sj_lt, sj_ge, sj_le, sj_eq, sj_eq, sj_eq, sj_length, sj_cons,
@@ -462,7 +461,7 @@ Id (*sj_std_f[])(void *b, Id, Id) = {sj_add, sj_sub, sj_mul, sj_div,
     sj_array_set, sj_array_push, sj_array_pop, sj_array_unshift,
     sj_array_len, sj_string_ref, _sj_string_split, sj_array_each,
     sj_hash_each, _sj_rx_match_string, sj_rand, sj_shl, sj_shr, sj_and,
-    sj_or, sj_not, sj_sleep, sj_b_or, sj_b_and, sj_b_xor, sj_type, 0};
+    sj_or, sj_not, sj_sleep, sj_b_or, sj_b_and, sj_b_xor, sj_type_of, 0};
 
 
 void sj_add_std_functions(void *b, Id env) {
@@ -488,7 +487,7 @@ Id sj_to_inspect(void *b, Id exp) {
 
 Id sj_to_string(void *b, Id exp) {
   int t = SJ_TYPE(exp);
-  if (t == SJ_TYPE_BOOL) { return S(exp.s ? "true" : "null"); }
+  if (t == SJ_TYPE_BOOL) { return S(exp.s ? "#t" : "#f"); }
   if (sj_is_number(exp)) return sj_string_new_number(b, exp);
   if (t == SJ_TYPE_CFUNC) { 
     Id s = S("CFUNC<");

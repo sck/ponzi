@@ -27,6 +27,8 @@
 #define SJ_VERSION "0.0.1"
 #define SJ_GC_DEBUG 
 
+int pid;
+
 typedef union {
   float f;
   int i;
@@ -72,6 +74,7 @@ Id sj_handle_error_with_err_string(const char *ctx,
   else { strcpy(h, ""); }
   snprintf((char *)&sj_error.error_str, 1023, "%s%s: %s", ctx, h, error_msg);
   printf("error: %s\n", sj_error.error_str);
+  exit(0);
   sj_error.error_number = errno;
   return sjError;
 }
@@ -93,7 +96,7 @@ Id sj_handle_error_with_err_string_nh(const char *ctx,
 #define SJ_STATIC_ALLOC_SIZE 65536
 #define SJ_VAR_COUNT 100000LL
 #define SJ_MEM_SIZE (size_t)(SJ_VAR_COUNT * SJ_STATIC_ALLOC_SIZE)
-#define SJ_PERF_MEM_SIZE (size_t)(2000LL * SJ_STATIC_ALLOC_SIZE)
+#define SJ_PERF_MEM_SIZE (size_t)(1500LL * SJ_STATIC_ALLOC_SIZE)
 
 #ifdef SJ_GC_DEBUG
 typedef struct {
@@ -179,7 +182,8 @@ open_failed:
  */
 
 // for garbage collection
-#define RCS (sizeof(int)+sizeof(short int))
+// lock + rc + type
+#define RCS (sizeof(int)+sizeof(int)+sizeof(short int))
 #define rc_t int
 #define SJ_CELL_SIZE (SJ_STATIC_ALLOC_SIZE - RCS)
 
@@ -195,6 +199,7 @@ open_failed:
 #define sj_string_size_t short int
 
 typedef struct {
+  int lock_pid;
   int rc_dummy;  
   Id first_free;
   size_t heap_size;
@@ -207,6 +212,7 @@ typedef struct {
 } sj_mem_descriptor_t;
 
 typedef struct {
+  int lock_pid;
   int rc_dummy; 
   Id next;
   size_t size;
@@ -233,7 +239,7 @@ sj_mem_descriptor_t *__sj_md(void *b) { return b; }
 
 int __ca(void *b, Id va, const char *where, int line) {
   char *p0 = VA_TO_PTR0(va); P_0_R(p0, 1); 
-  rc_t *rc = (rc_t *)(p0 - RCS);
+  rc_t *rc = (rc_t *)(p0 - RCS + sizeof(int));
   if ((*rc) == 0) { printf("[%s:%d] error: VA is not allocated!\n", where, line); abort(); }
   //if ((*rc) == 1) { printf("[%s:%d] Warning: RC is 0\n", where, line); abort(); }
   return 1;
@@ -242,9 +248,7 @@ int __ca(void *b, Id va, const char *where, int line) {
 int cnil(Id i) { return i.s == sjNil.s; }
 Id cb(int i) { return i ? sjTrue : sjNil; }
 
-sj_mem_chunk_descriptor_t *sj_md_first_free(void *b) {
-    return VA_TO_PTR0(sj_md->first_free);}
-
+#define sj_md_first_free VA_TO_PTR0((va_first = sj_md->first_free))
 
 int sj_var_free(void *b) {
     return (sj_md->total_size - sj_md->heap_size) / SJ_STATIC_ALLOC_SIZE; }
@@ -268,11 +272,13 @@ Id __sj_retain(void *b, Id va);
     ((SJ_MEM_SIZE / SJ_STATIC_ALLOC_SIZE) * SJ_STATIC_ALLOC_SIZE)
 int sj_init_memory(void *b, size_t size) {
   size_t s = size - sj_header_size();
+  Id va_first;
   if (sj_md->magic != SJ_DB_MAGIC) {
     sj_md->first_free = sj_header_size_ssa();
     sj_md->total_size = s;
-    sj_mem_chunk_descriptor_t *c = sj_md_first_free(b);
+    sj_mem_chunk_descriptor_t *c = sj_md_first_free;
     c->next.s = 0;
+    c->lock_pid = 0;
     c->size = s;
 
     SJ_ADR(sj_md->symbol_interns) = 1;
@@ -324,39 +330,77 @@ void sj_alloc_debug(void *b, char *p, short int type) {
       sj_type_to_cp(type));
 }
 
+inline Id sj_atomic_cas_id(volatile Id *v, Id new, Id old) {
+    return (Id)sj_atomic_casq((size_t *)v, new.s, old.s); }
+
+int sj_lock_p(char *p) { 
+  //printf("lock: %lx\n", p);
+retry: {}
+  int *pl = (int *)p;
+  int ov = *pl;
+  if (ov) { 
+      if (ov == pid) { printf("DEADLOCK!\n"); abort(); }
+      printf("[%d] LOCK already locked: %d...\n", pid, ov); goto retry; 
+  }
+  int r = sj_atomic_casl(pl, pid, ov);
+  if (ov = r) { printf("lock failed.. retry.\n"); goto retry; }
+  return 1;
+}
+
+int sj_unlock_p(char *p) { 
+  //printf("unlock: %lx\n", p);
+  int *i = (int *)p; *i = 0; return 1; }
+
 size_t sj_alloc_counter = 0;
 Id sj_valloc(void *b, const char *where, short int type) {
+  Id va_first;
   sj_alloc_counter++;
-  sj_mem_chunk_descriptor_t *c = sj_md_first_free(b); 
+retry_start:
+  {}
+  sj_mem_chunk_descriptor_t *c = sj_md_first_free; 
   if (!c) return sj_handle_error_with_err_string_nh(where, "1: Out of memory");
+  sj_lock_p((char *)c);
   Id r = { 0x0 };
-  if (c->size < SJ_STATIC_ALLOC_SIZE)
-      return sj_handle_error_with_err_string_nh(where, "2: Out of memory");
+  if (c->size < SJ_STATIC_ALLOC_SIZE) {
+    r = sj_handle_error_with_err_string_nh(where, "2: Out of memory");
+    goto finish;
+  }
   if (c->size == SJ_STATIC_ALLOC_SIZE) {
     // chunk size ==  wanted size
-    sj_md->first_free = c->next; 
+    Id ns = sj_atomic_cas_id(&sj_md->first_free, c->next, va_first); 
+    if (ns.s != va_first.s) { printf("alloc first failed\n"); goto retry; }
     PTR_TO_VA(r, (char *)c);
   } else {
     // chunk is larger than wanted 
-    c->size -= SJ_STATIC_ALLOC_SIZE;
+    size_t ns, os;
+    os = c->size;
+    ns = sj_atomic_sub(&c->size, SJ_STATIC_ALLOC_SIZE);
+    if (ns != os) { printf("alloc sub failed\n"); goto retry; }
     PTR_TO_VA(r, (char *)c + c->size);
   }
   if (!c->next.s) { sj_md->heap_size += SJ_STATIC_ALLOC_SIZE; }
   if (r.s) { 
     SJ_TYPE(r) = type; 
     char *p = VA_TO_PTR0(r);
-    rc_t *rc = (rc_t *) (p - RCS);
+    rc_t *rc = (rc_t *) (p - RCS + sizeof(int));
     *rc = 0x1;
     sj_alloc_debug(b, (char *)rc, type);
     short int *t = (short int *)(p - sizeof(short int));
     *t = type;
   }
-  return r; 
+finish:
+  sj_unlock_p((char *) c);
+  return r;
+
+retry:
+  sj_unlock_p((char *)c);
+  goto retry_start;
 }
 
 int sj_zero(void *b, Id va) { 
   char *p = VA_TO_PTR0(va); P_0_R(p, 0); 
-  memset(p, 0, SJ_CELL_SIZE); return 0;}
+  sj_lock_p(p);
+  memset(p, 0, SJ_CELL_SIZE); sj_unlock_p(p); return 1;}
 
 #define SJ_ALLOC(va, type) va = sj_valloc(b, __FUNCTION__, type); VA_0_R(va, sjNil);
 #define SJ_ALLOC2(va, type, r) va = sj_valloc(b, __FUNCTION__, type); VA_0_R(va, r);
@@ -367,10 +411,17 @@ int sj_free(void *b, Id va) {
   char *used_chunk_p = VA_TO_PTR(va); P_0_R(used_chunk_p, 0);
   sj_mem_chunk_descriptor_t *mcd_used_chunk = 
       (sj_mem_chunk_descriptor_t *)used_chunk_p;
-  mcd_used_chunk->next = sj_md->first_free;
+  sj_lock_p((char *)mcd_used_chunk);
   mcd_used_chunk->size = SJ_STATIC_ALLOC_SIZE;
   mcd_used_chunk->rc_dummy = 0;
-  sj_md->first_free = va;
+  while (1) {
+    Id o = mcd_used_chunk->next = sj_md->first_free;
+    Id r = sj_atomic_cas_id(&sj_md->first_free, va, o);
+    if (o.s == r.s) goto finish;
+    printf("free failed! try again\n");
+  }
+finish:
+  sj_unlock_p((char *)mcd_used_chunk);
   return 1;
 }
 
@@ -444,7 +495,7 @@ int sj_is_type_i(Id va, int t) { return c_type(SJ_TYPE(va)) == c_type(t); }
  */
 
 #define RCI if (!va.s || va.t.type < 3) { return va; }; char *p0 = VA_TO_PTR0(va); \
-  P_0_R(p0, sjNil); rc_t *rc = (rc_t *)(p0 - RCS);
+  P_0_R(p0, sjNil); rc_t *rc = (rc_t *)(p0 - RCS + sizeof(int));
 
 int sj_ary_free(void *b, Id);
 int sj_ht_free(void *b, Id);
@@ -530,7 +581,7 @@ void __sj_garbage_collect(void *b, int full) {
   size_t i;
   for (i = 0; i < entries; ++i, p += SJ_STATIC_ALLOC_SIZE) {
     rc_t *rc = (rc_t *)p;
-    short int *t = (short int *) (p + sizeof(int));
+    short int *t = (short int *) (p + sizeof(int) + sizeof(int));
     if (*rc == 1) {
       Id va;
       PTR_TO_VA(va, p + RCS);
@@ -988,6 +1039,7 @@ void sj_setup() {
   SJ_INT(sjTail)  = 1;
   SJ_TYPE(sjError) = SJ_TYPE_SPECIAL;
   SJ_INT(sjError)  = 2;
+  pid = getpid();
 }
 
 char *cmd;
@@ -1426,7 +1478,6 @@ void test_atomic() {
   size_t s = 1;
   size_t n;
   size_t o, rr;
-  rr = sj_atomic_cas(&s, 2, 1);
   printf("s: %ld r %ld\n", s, rr);
   rr = sj_atomic_add(&s, 10);
   printf("s: %ld r %ld\n", s, rr);
@@ -1438,6 +1489,17 @@ void test_atomic() {
 
 void test_perf() {
   void *b = sj_perf;
+  D("perf", sj_int(1));
+  do {
+    Id h = sj_ht_new(b);
+    //sj_ht_free(b, h);
+    sj_ht_free(b, h);
+    //Id k = S("key"), v = S("value");
+    ////sj_ht_set(b, h, k, v);
+    ////sj_ht_free(b, h);
+    //sj_free(b, k);
+    //sj_free(b, v);
+  } while (1);
   return;
   Id s;
   {void *b = sj_perf; s = S("foo");}
@@ -1461,7 +1523,6 @@ void sj_setup_perf() {
   FILE* fb = fopen("boot.scm", "r");
   sj_repl(b, fb, S("boot.scm"), 0);
 }
-
 
 int main(int argc, char **argv) {
   sj_setup();
@@ -1496,7 +1557,7 @@ int main(int argc, char **argv) {
   if (r) sj_setup_perf();
   FILE* fb = fopen("boot.scm", "r");
   sj_repl(b, fb, S("boot.scm"), 0);
-  test_perf();
+  if (sj_perf_mode) test_perf();
   sj_repl(b, fin, S(scm_filename), sj_interactive);
   return 0;
 }
