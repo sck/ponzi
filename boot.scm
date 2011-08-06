@@ -4,7 +4,7 @@
     (array-each xs (lambda (v) (hash-set! h (car v) (cdr v))))
     h))
 (define first car)
-(define last cdr)
+(define rest cdr)
 
 (define int-times (lambda (n l m) 
     (l (- m n)) 
