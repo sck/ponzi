@@ -1,4 +1,4 @@
-#!./schemejit
+#!./ponzi
 
 (display (quote hello))
 (newline)

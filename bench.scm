@@ -1,4 +1,4 @@
-#! ./schemejit 
+#! ./ponzi 
 
 (define m (lambda (n l) 
   (begin 

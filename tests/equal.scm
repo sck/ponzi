@@ -1,4 +1,4 @@
-#! ./schemejit
+#! ./ponzi
 
 ; (display (+ (equal? 2 2) (equal? 2 3)))
 ;(newline)

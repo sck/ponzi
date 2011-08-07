@@ -333,7 +333,8 @@ void pz_alloc_debug(void *b, char *p, short int type) {
 inline Id pz_atomic_cas_id(volatile Id *v, Id new, Id old) {
     return (Id)pz_atomic_casq((size_t *)v, new.s, old.s); }
 
-int pz_lock_p(char *p) { 
+int pz_lock_p(char *_p) { 
+  char *p = _p - RCS;
   //printf("lock: %lx\n", p);
 retry: {}
   int *pl = (int *)p;
@@ -347,9 +348,17 @@ retry: {}
   return 1;
 }
 
-int pz_unlock_p(char *p) { 
+int pz_unlock_p(char *_p) { 
+  char *p = _p - RCS;
   //printf("unlock: %lx\n", p);
   int *i = (int *)p; *i = 0; return 1; }
+
+#define LI if (!va.s || va.t.type < 3) { return 0; }; char *p0 = VA_TO_PTR0(va); \
+  P_0_R(p0, 0); char *p = (char *)p0;
+
+
+int pz_lock_va(void *b, Id va) { LI; return pz_lock_p(p); }
+int pz_unlock_va(void *b, Id va) { LI; return pz_unlock_p(p); }
 
 size_t pz_alloc_counter = 0;
 Id pz_valloc(void *b, const char *where, short int type) {
@@ -399,8 +408,7 @@ retry:
 
 int pz_zero(void *b, Id va) { 
   char *p = VA_TO_PTR0(va); P_0_R(p, 0); 
-  pz_lock_p(p);
-  memset(p, 0, PZ_CELL_SIZE); pz_unlock_p(p); return 1;}
+  memset(p, 0, PZ_CELL_SIZE); return 1;}
 
 #define PZ_ALLOC(va, type) va = pz_valloc(b, __FUNCTION__, type); VA_0_R(va, pzNil);
 #define PZ_ALLOC2(va, type, r) va = pz_valloc(b, __FUNCTION__, type); VA_0_R(va, r);
@@ -805,7 +813,11 @@ typedef struct {
 } pz_hash_t;
 
 Id pz_ht_new(void *b) {
-    Id va_ht; PZ_ALLOC(va_ht, PZ_TYPE_HASH); pz_zero(b, va_ht); return va_ht; }
+    Id va_ht; PZ_ALLOC(va_ht, PZ_TYPE_HASH); 
+    pz_lock_va(b, va_ht);
+    pz_zero(b, va_ht); 
+    pz_unlock_va(b, va_ht);
+    return va_ht; }
 
 size_t pz_ht_hash(void *b, Id va_s) {
     return pz_hash_var(b, va_s) % PZ_HT_BUCKETS; }
