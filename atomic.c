@@ -42,3 +42,15 @@ inline size_t pz_atomic_sub(size_t* v, size_t sub) {
     return pz_atomic_add(v, -sub); }
 
 size_t pz_atomic_inc(size_t* v) { return pz_atomic_add(v, 1); }
+
+inline size_t pz_atomic_addl(int* v, int add)
+{
+  __asm__ __volatile__("lock xaddl %0,%1"
+               : "=r" (add), "=m" (*v)
+               : "0" (add)
+               : "memory");
+  return add;
+}
+
+inline size_t pz_atomic_subl(int* v, int sub) { 
+    return pz_atomic_addl(v, -sub); }
