@@ -7,6 +7,9 @@
 
 Id string_ref;
 
+Id pz_to_string(void *b, Id exp);
+#define VB void *b, Id env
+
 Id pz_string_parse(void *b, Id s) {
   if (!s.s) return pzNil;
   Id ary = pz_string_split(b, s, '"');
@@ -19,10 +22,9 @@ Id pz_string_parse(void *b, Id s) {
     if (!string_mode) {
       pz_ary_push(b, r, v);
     } else {
-      pz_ary_push(b, string_ref, v);
+      int i = pz_register_string_ref(b, v);
       Id sr = S("(string-ref ");
-      pz_string_append(b, sr, pz_string_new_number(b, 
-          pz_int(pz_ary_len(b, string_ref) - 1)));
+      pz_string_append(b, sr, pz_string_new_number(b, pz_int(i)));
       pz_string_append(b, sr, S(")"));
       pz_ary_push(b, r, sr);
     }
@@ -51,15 +53,15 @@ int pz_process_number(char *result, char *source) {
     s++;
     n--;
   }
-  if (n > 2 && s[1] == 'x' && s[0] == '0') {
+  if (n > 2 && s[1] == 'x' && s[0] == '#') {
     base = 16;
     s += 2;
   }
-  if (n > 2 && s[0] == '0' && s[1] >= '0' && s[1] <= '7' ) {
+  if (n > 2 && s[1] == 'o' && s[0] == '#') {
     base = 8;
-    s += 1;
+    s += 2;
   }
-  if (n > 2 && s[1] == 'b' && s[0] == '0') {
+  if (n > 2 && s[1] == 'b' && s[0] == '#') {
     base = 2;
     s += 2;
   }
@@ -93,11 +95,14 @@ Id pz_read_from(void *b, Id tokens) {
 
   pz_reset_errors(b);
   if (!tokens.s) return pzNil;
+  Id token;
 next_token:
   if (pz_ary_len(b, tokens) == 0) 
       return pz_handle_error_with_err_string_nh(__FUNCTION__, 
           "unexpected EOF while reading");
-  Id token = pz_ary_unshift(b, tokens);
+  do {
+   token = pz_ary_unshift(b, tokens);
+  } while (pz_string_equals_cp_i(token, ""));
   if (pz_string_starts_with(b, token, S("'"))) {
     Id word = pz_string_sub_str_new(b, token, 1, -1);
     quote = 1;
@@ -129,7 +134,8 @@ finish:
 }
 
 Id pz_parse(void *b, Id va_s) { 
-  return pz_read_from(b, pz_tokenize(b, pz_string_parse(b, va_s))); 
+  return pz_read_from(b, D("pz_tokenize", pz_tokenize(b,
+  pz_string_parse(b, va_s)))); 
 }
 
 Id S_icounter;
@@ -139,7 +145,6 @@ void pz_perf_count(Id this) {
   void *b = pz_perf;
   pz_ht_inc(b, pz_md->globals, S_icounter);
 }
-
 
 void pz_perf_show() {
   void *b = pz_perf;
@@ -166,7 +171,11 @@ Id pz_eval(void *b, Id x, Id _env, Id this, Id previous, int last) {
     stack_overflow = 1;
   }
   pz_retain(pzNil, _env);
-  pz_garbage_collect(b);
+  pz_mem_dump(b);
+  pz_garbage_collect_full(b);
+  //printf("AFTER\n");
+  //pz_mem_dump(b);
+  D("x", x);
   Id func_name = pzNil;
 tail_rc_start:
   val= pzNil; vars = pzNil; rv = pzNil;
@@ -174,10 +183,13 @@ tail_rc_start:
   //printf("START: %x %lx\n", PZ_ADR(vars), &vars);
   env = (_env.s ? _env : pz_globals);
   if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
-    if (pz_string_starts_with(b, x, S(":"))) {
-      RETURN(pz_intern(pz_to_symbol(pz_string_sub_str_new(b, x, 1, -1))));
-    }
     if (pz_string_equals_cp_i(x, "globals")) RETURN(pz_globals);
+    if (pz_string_equals_cp_i(x, "string-interns")) RETURN(pz_string_interns);
+    if (pz_string_equals_cp_i(x, "symbol-interns")) RETURN(pz_symbol_interns);
+    if (pz_string_equals_cp_i(x, "string-refs")) RETURN(pz_string_refs);
+    if (pz_string_equals_cp_i(x, "string-refs-dict")) RETURN(pz_string_refs_dict);
+    if (pz_string_equals_cp_i(x, "#t")) RETURN(pzTrue);
+    if (pz_string_equals_cp_i(x, "#f")) RETURN(pzNil);
     RETURN(pz_env_find(b, env, x));
   } else if (PZ_TYPE(x) != PZ_TYPE_ARRAY) {
     RETURN(x); // constant literal
@@ -192,7 +204,15 @@ tail_rc_start:
       RETURN(a);
     }
   }
+  if (pz_ary_len(b, x) == 0) {
+    RETURN(pz_handle_error_with_err_string(__FUNCTION__, "No proc given", 
+        pz_string_ptr(pz_to_string(b, func_name)))); 
+  }
   x0 = ca_f(x);
+  if (!pz_is_string(x0)) {
+    RETURN(pz_handle_error_with_err_string(__FUNCTION__, "Not a symbol type", 
+        pz_string_ptr(pz_to_string(b, func_name)))); 
+  }
   if (pz_string_equals_cp_i(x0, "quote")) {
     RETURN(ca_s(x));
   } else if (pz_string_equals_cp_i(x0, "/#")) { // (/# ^regexp$)
@@ -328,8 +348,6 @@ Id  __try_convert_to_ints(void *b, Id x) {
 #define ON_F ; } else if (t == 2) {
 #define R  ; } return r;
 
-Id pz_to_string(void *b, Id exp);
-#define VB void *b, Id env
 
 Id pz_add(VB, Id x) { ON_I r = pz_int(ai + bi) ON_F r = pz_float(af + bf) R }
 Id pz_sub(VB, Id x) { ON_I r = pz_int(ai - bi) ON_F r = pz_float(af - bf) R }
@@ -368,7 +386,7 @@ Id pz_array_pop(VB, Id x) { return pz_ary_pop(b, ca_f(x)); }
 Id pz_array_unshift(VB, Id x) { return pz_ary_unshift(b, ca_f(x)); }
 Id pz_array_len(VB, Id x) { return pz_int(pz_ary_len(b, ca_f(x))); }
 Id pz_string_ref(VB, Id x) { 
-    return pz_ary_index(b, string_ref, PZ_INT(ca_f(x))); }
+    return pz_ary_index(b, pz_string_refs, PZ_INT(ca_f(x))); }
 Id _pz_string_split(VB, Id x) { 
     return pz_string_split2(b, ca_f(x), ca_s(x)); }
 
@@ -478,74 +496,15 @@ void pz_add_globals(void *b, Id env) {
 }
 
 Id pz_to_inspect(void *b, Id exp) {
-  if (PZ_TYPE(exp) == PZ_TYPE_SYMBOL) {
-    Id s = S(":");
-    return pz_string_append(b, s, exp);
-  }
-  return pz_to_string(b, exp);
+  char dsc[16834];
+  pz_dump_to_string(b, exp, (char *)&dsc, PZ_DUMP_RECURSE | PZ_DUMP_INSPECT);
+  return pz_string_new_c(b, dsc);
 }
 
 Id pz_to_string(void *b, Id exp) {
-  int t = PZ_TYPE(exp);
-  if (t == PZ_TYPE_BOOL) { return S(exp.s ? "#t" : "#f"); }
-  if (pz_is_number(exp)) return pz_string_new_number(b, exp);
-  if (t == PZ_TYPE_CFUNC) { 
-    Id s = S("CFUNC<");
-    pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR(cf, exp, PZ_TYPE_CFUNC, pzNil);
-    pz_string_append(b, s, pz_string_new_hex_number(b, 
-        pz_int((long)&cf->func_ptr)));
-    pz_string_append(b, s, S(">"));
-    return s;
-  }
-  Id st = pz_string_new_0(b);
-  if ((t == PZ_TYPE_SYMBOL || t == PZ_TYPE_STRING) &&
-      pz_is_interned(b, exp)) pz_string_append(b, st, S("<I>"));
-
-  if (PZ_TYPE(exp) == PZ_TYPE_SYMBOL) {
-    pz_string_append(b, st, S(":"));
-    pz_string_append(b, st, exp);
-    return st;
-  }
-  if (PZ_TYPE(exp) == PZ_TYPE_STRING) {
-    pz_string_append(b, st, S("\""));
-    pz_string_append(b, st, exp);
-    pz_string_append(b, st, S("\""));
-    return st;
-  }
-  if (PZ_TYPE(exp) == PZ_TYPE_REGEXP) {
-    Id s = S("(#/ ");
-    pz_string_append(b, s, pz_rx_match_string(b, exp));
-    pz_string_append(b, s, S(")"));
-    return s;
-  }
-  if (PZ_TYPE(exp) == PZ_TYPE_ARRAY) {
-    if (pz_ary_is_lambda(b, exp)) {
-      Id s = S("(lambda ");
-      Id vdecl = ca_f(exp);
-      if (PZ_TYPE(vdecl) == PZ_TYPE_ARRAY) {
-        pz_string_append(b, s, S("("));
-        pz_string_append(b, s, pz_ary_join_by_s(b, pz_ary_map(b, vdecl,
-            pz_to_string), S(" ")));
-        pz_string_append(b, s, S(")"));
-      } else pz_string_append(b, s, vdecl);
-      pz_string_append(b, s, S(" ("));
-      pz_string_append(b, s, pz_ary_join_by_s(b, pz_ary_map(b, ca_s(exp), 
-          pz_to_string), S(" ")));
-      pz_string_append(b, s, S("))"));
-      return s;
-    }
-    Id s = S("(");
-    pz_string_append(b, s, pz_ary_join_by_s(b, 
-        pz_ary_map(b, exp, pz_to_string), S(" ")));
-    return pz_string_append(b, s, S(")"));
-  }
-  if (PZ_TYPE(exp) == PZ_TYPE_HASH) {
-    Id s = S("{");
-    pz_string_append(b, s, pz_ary_join_by_s(b, 
-        pz_ht_map(b, exp, pz_to_string), S(", ")));
-    return pz_string_append(b, s, S("}"));
-  }
-  if (PZ_TYPE(exp) != PZ_TYPE_ARRAY) return exp;
+  char dsc[16834];
+  pz_dump_to_string(b, exp, (char *)&dsc, PZ_DUMP_RECURSE);
+  return pz_string_new_c(b, dsc);
 }
 
 void pz_repl(void *b, FILE *f, Id filename, int interactive) {
@@ -553,15 +512,15 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
   while (1) {
     stack_overflow = 0;
     nested_depth = 0;
-    string_ref = pz_retain(filename, pz_ary_new(b));
     Id parsed = pz_retain(filename, pz_parse(b, 
         pz_input(b, f, interactive, pz_perf_mode ? "perf>" :  "ponzi> ")));
+    D("parsed", parsed);
     Id val = pz_eval(b, parsed, pz_globals, filename, pzNil, 1);
     pz_release(parsed);
-    pz_release(string_ref);
     if (feof(f)) break;
-    if (interactive) printf("===> %s\n", pz_string_ptr(pz_to_inspect(b, val)));
+    if (interactive) printf("===> %s\n", pz_string_ptr(pz_to_string(b, val)));
     pz_garbage_collect_full(b);
+    //pz_mem_dump(b);
     //pz_mem_dump(b);
   }
   pz_release(filename);
