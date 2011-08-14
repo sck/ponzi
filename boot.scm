@@ -1,7 +1,7 @@
-(define puts (lambda xs (array-each xs display) (newline)))
+(define displayln (lambda xs (vector-each xs display) (newline)))
 (define #hash (lambda xs 
     (define h (make-hash)) 
-    (array-each xs (lambda (v) (hash-set! h (car v) (cdr v))))
+    (vector-each xs (lambda (v) (hash-set! h (car v) (cdr v))))
     h))
 (define first car)
 (define rest cdr)
@@ -12,16 +12,16 @@
 
 (define times (lambda (n l) (int-times n l (+ n 1))))
 
-(define array-map (lambda (array l) 
-    (define a (make-array)) 
-    (array-each array (lambda (x) 
-      (array-push a (l x)))) 
+(define vector-map (lambda (vector l) 
+    (define a (make-vector)) 
+    (vector-each vector (lambda (x) 
+      (vector-push! a (l x)))) 
    a))
 
-(define array-grep (lambda (array rx)
-  (define a (make-array))
-  (array-each array (lambda (v)
-    (if (rx-match-string rx v) (array-push a v) 0)))
+(define vector-grep (lambda (vector rx)
+  (define a (make-vector))
+  (vector-each vector (lambda (v)
+    (if (rx-match-string rx v) (vector-push! a v) 0)))
   a))
 
 (define test-parallel-write (lambda (n) 
@@ -38,5 +38,5 @@
     (times n l) 
     (newline)
     (display (- (current-ms) before)) 
-    (puts (quote ms)))))
+    (displayln (quote ms)))))
 

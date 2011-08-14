@@ -922,8 +922,11 @@ size_t pz_hash_var(void *b, Id va) {
   return va.s;
 }
 
-Id cnil2(Id i) { 
-    return PZ_TYPE(i) == PZ_TYPE_ARRAY && pz_ary_len(i) == 0 ? pzNil : i; }
+#define pz_ary_len(b, a) __pz_ary_len(__FUNCTION__, __LINE__, b, a)
+int __pz_ary_len(WLB, Id va_ary);
+
+Id cnil2(void *b, Id i) { 
+    return PZ_TYPE(i) == PZ_TYPE_ARRAY && pz_ary_len(b, i) == 0 ? pzNil : i; }
 
 #define pz_equals_i(a, o) __pz_equals_i(b, a, o)
 int __pz_equals_i(void *b, Id a, Id o) {
@@ -935,7 +938,7 @@ int __pz_equals_i(void *b, Id a, Id o) {
         if (da.s[i] != db.s[i]) return 0; }
      return 1;
   } 
-  return cnil2(a).s == cnil2(o).s;
+  return cnil2(b, a).s == cnil2(b, o).s;
 }
 
 Id pz_to_symbol(Id va_s) {
@@ -1175,7 +1178,6 @@ Id pz_env_new(void *b, Id va_ht_parent) {
   while (va_ht.s && !(found = __pz_ht_get(w, l, b, va_ht, va_key)).s) { \
     pz_hash_t *ht; PZ_TYPED_VA_TO_PTR2(ht, va_ht, PZ_TYPE_HASH, pzNil); \
     va_ht = ht->va_parent; \
-    printf("va_ht: %lx\n", va_ht.s); \
   }
 
 #define pz_env_find(b, ht, key) __pz_env_find(__func__, __LINE__, b, ht, key)
@@ -1385,8 +1387,9 @@ Id pz_ary_pop(void *b, Id va_ary) {
   return pz_release(ary->va_entries[ary->start + ary->size]);
 }
 
-int pz_ary_len(void *b, Id va_ary) {
-  ht_array_t *ary; PZ_TYPED_VA_TO_PTR(ary, va_ary, PZ_TYPE_ARRAY, -1);
+#define pz_ary_len(b, a) __pz_ary_len(__FUNCTION__, __LINE__, b, a)
+int __pz_ary_len(WLB, Id va_ary) {
+  ht_array_t *ary; PZ_TYPED_VA_TO_PTR2(ary, va_ary, PZ_TYPE_ARRAY, -1);
   return ary->size - ary->start;
 }
 
@@ -1773,11 +1776,14 @@ int pz_register_string_ref(void *b, Id _s) {
 Id pz_input(void *b, FILE *f, int interactive, char *prompt) {
   if (interactive) printf("%ld:%s", pz_active_entries(b), prompt); 
   Id cs = S("(begin");
-  size_t l; 
-  char *p;
+  size_t ll; 
+  char p[16384], *pp;
   int check_hashbang_first_line = !interactive;
 next_line:
-  p = fgetln(f, &l);
+  pp = fgetln(f, &ll);
+  size_t l = ll > 16383 ? 16383 : ll;
+  memcpy(p, pp, l);
+  p[l] = 0x0;
   if (l > 0 && check_hashbang_first_line && (p[0] == '#')) {
     check_hashbang_first_line = 0;
     goto next_line;
