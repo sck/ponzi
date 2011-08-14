@@ -14,3 +14,6 @@
 (f (boolean? 0))
 (f (boolean? '()))
 
+(equal? (make-vector 3 0) '#(0 0 0))
+(equal? (make-vector 3 1) '#(1 1 1))
+

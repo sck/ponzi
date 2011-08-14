@@ -253,8 +253,8 @@ tail_rc_start:
     while ((v = pz_ary_iterate(b, x, &i)).s) 
         pz_ary_push(b, vars, pz_eval2(v, env, 0));
     func_name = x0;
+    D("env", env);
     Id lambda = pz_env_find(b, env, func_name);
-    //D("func_name", func_name);
     if (!lambda.s) { 
       RETURN(pz_handle_error_with_err_string(__FUNCTION__, "Unknown proc", 
           pz_string_ptr(pz_to_string(b, func_name)))); 
