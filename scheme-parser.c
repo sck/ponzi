@@ -3,8 +3,6 @@
  * <http://norvig.com/lispy.html>
  */
 
-#define IS(s) pz_intern(S(s))
-
 Id string_ref;
 
 Id pz_to_string(void *b, Id exp);
@@ -12,32 +10,40 @@ Id pz_to_string(void *b, Id exp);
 
 Id pz_string_parse(void *b, Id s) {
   if (!s.s) return pzNil;
-  Id ary = pz_string_split(b, s, '"');
+  Id ary = pz_retain0(pz_string_split(b, s, '"'));
   if (!ary.s) return pzNil;
   int string_mode = 0;
   Id v;
   int i = 0;
-  Id r = pz_ary_new(b);
+  Id r = pz_retain0(pz_ary_new(b));
   while ((v = pz_ary_iterate(b, ary, &i)).s) {
     if (!string_mode) {
       pz_ary_push(b, r, v);
     } else {
       int i = pz_register_string_ref(b, v);
-      Id sr = S("(string-ref ");
+      Id sr = IS("(string-ref ");
       pz_string_append(b, sr, pz_string_new_number(b, pz_int(i)));
-      pz_string_append(b, sr, S(")"));
+      pz_string_append(b, sr, IS(")"));
       pz_ary_push(b, r, sr);
     }
     string_mode = 1 - string_mode;
   }
-  return pz_ary_join_by_s(b, r, S(""));
+  pz_release(ary);
+  Id rr = pz_ary_join_by_s(b, r, IS(""));
+  pz_release(r);
+  return rr;
 }
 
 Id pz_tokenize(void *b, Id va_s) {
   if (!va_s.s) return pzNil;
-  return pz_string_split(b,
-      pz_string_replace(b, pz_string_replace(b, va_s, S("("), S(" ( ")),
-      S(")"), S(" ) ")), ' ');
+  pz_retain0(va_s);
+  Id r1, r2;
+  Id r = pz_string_split(b,
+      (r1 = pz_string_replace(b, 
+        (r2 = pz_string_replace(b, va_s, IS("("), IS(" ( "))), 
+      IS(")"), IS(" ) "))), ' ');
+  pz_release_ja(r1); pz_release_ja(r2); pz_release(va_s);
+  return r;
 }
 
 int pz_process_number(char *result, char *source) {
@@ -95,33 +101,35 @@ Id pz_atom(void *b, Id token) {
 }
 
 #define RETURN(v) { rv = v; goto finish; }
-Id pz_read_from(void *b, Id tokens) {
+Id __pz_read_from(void *b, Id tokens) {
   Id rv = pzNil;
   int quote = 0;
 
   pz_reset_errors(b);
   if (!tokens.s) return pzNil;
-  Id token;
+  Id token = pzNil;
 next_token:
   if (pz_ary_len(b, tokens) == 0) 
       return pz_handle_error_with_err_string_nh(__FUNCTION__, 
           "unexpected EOF while reading");
   do {
-   token = pz_ary_unshift(b, tokens);
+   pz_release(token);
+   token = pz_retain0(pz_ary_unshift(b, tokens));
   } while (pz_string_equals_cp_i(token, ""));
-  if (pz_string_starts_with(b, token, S("'"))) {
-    Id word = pz_string_sub_str_new(b, token, 1, -1);
+  if (pz_string_starts_with_cp_i(b, token, "'")) {
+    Id word = pz_retain0(pz_string_sub_str_new(b, token, 1, -1));
     quote = 1;
     if (pz_string_len(b, word) > 0) {
       token = word; 
     } else {
+      pz_release(token);
       goto next_token;
     }
   }
   if (pz_string_equals_cp_i(token, "(")) {
     Id l = pz_ary_new(b);
     while (!pz_string_equals_cp_i(ca_f(tokens), ")")) {
-        pz_ary_push(b, l, pz_read_from(b, tokens)); CE(break) }
+        pz_ary_push(b, l, __pz_read_from(b, tokens)); CE(break) }
     pz_ary_unshift(b, tokens);
     RETURN(l);
   } else if (pz_string_equals_cp_i(token, ")")) {
@@ -130,33 +138,28 @@ next_token:
   } else RETURN(pz_atom(b, token));
 
 finish:
+  pz_release(token);
   if (quote) {
     Id ql = pz_ary_new(b);
-    pz_ary_push(b, ql, pz_intern(S("quote")));
+    pz_ary_push(b, ql, pz_intern(IS("quote")));
     pz_ary_push(b, ql, rv);
     rv = ql;
   }
   return rv;
 }
 
+Id pz_read_from(void *b, Id tokens) {
+  pz_retain0(tokens);
+  Id r = __pz_read_from(b, tokens);
+  pz_release(tokens);
+  return r;
+}
+
 Id pz_parse(void *b, Id va_s) { 
-  return pz_read_from(b, pz_tokenize(b, pz_string_parse(b, va_s))); 
-}
-
-Id S_icounter;
-
-void pz_perf_count(Id this) {
-  if (pz_perf_mode) return;
-  void *b = pz_perf;
-  pz_ht_inc(b, pz_md->globals, S_icounter);
-}
-
-void pz_perf_show() {
-  void *b = pz_perf;
-  Id n = pz_ht_get(b, pz_md->globals, S_icounter);
-  D("n", n);
-  pz_garbage_collect(b);
-  pz_mem_dump(b);
+  pz_retain0(va_s);
+  Id r =  pz_read_from(b, pz_tokenize(b, pz_string_parse(b, va_s))); 
+  pz_release(va_s);
+  return r;
 }
 
 #define DC2B(va) pz_deep_copy(b, pz_perf, va)
@@ -175,11 +178,8 @@ Id pz_eval(void *b, Id x, Id _env, Id this, Id previous, int last) {
     stack_overflow = 1;
   }
   //D("x", x);
-  pz_retain(pzNil, _env);
+  pz_retain0(_env);
   pz_garbage_collect(b);
-  //printf("AFTER\n");
-  //D("x", x);
-  //pz_mem_dump(b);
   Id func_name = pzNil;
 tail_rc_start:
   val= pzNil; vars = pzNil; rv = pzNil;
@@ -201,7 +201,7 @@ tail_rc_start:
   if (PZ_TYPE(x) == PZ_TYPE_ARRAY && pz_ary_len(b, x) == 3) {
     Id m = ca_s(x);
     if (PZ_TYPE(m) == PZ_TYPE_SYMBOL && pz_string_equals_cp_i(m, ".")) {
-      Id a = pz_retain(pzNil, pz_ary_new(b));
+      Id a = pz_retain0(pz_ary_new(b));
       pz_ary_push(b, a, pz_eval2(ca_f(x), env, 0));
       pz_ary_push(b, a, pz_eval2(ca_th(x), env, 1));
       pz_release(a);
@@ -221,7 +221,7 @@ tail_rc_start:
     RETURN(ca_s(x));
   } else if (pz_string_equals_cp_i(x0, "/#")) { // (/# ^regexp$)
     Id rx = pz_rx_new(pz_ary_join_by_s(b,  
-        pz_ary_clone_part(b, x, 1, -1), S(" ")));
+        pz_ary_clone_part(b, x, 1, -1), IS(" ")));
     return rx;
   } else if (pz_string_equals_cp_i(x0, "if")) { // (if test conseq alt)
     Id test = ca_s(x), conseq = ca_th(x), alt = ca_fth(x);
@@ -238,7 +238,7 @@ tail_rc_start:
     pz_ary_push(b, l, ca_s(x)); 
     Id c = pz_ary_new(b);
     int i = 2;
-    pz_ary_push(b, c, pz_intern(pz_to_symbol(S("begin"))));
+    pz_ary_push(b, c, pz_intern(pz_to_symbol(IS("begin"))));
     Id v;
     while ((v = pz_ary_iterate(b, x, &i)).s) pz_ary_push(b, c, v);
     pz_ary_push(b, l, c); pz_ary_push(b, l, env);
@@ -252,7 +252,7 @@ tail_rc_start:
         DC2P(this), DC2P(this))));
   } else {  // (proc exp*)
     Id v;
-    vars = pz_retain(pzNil, pz_ary_new(b));
+    vars = pz_retain0(pz_ary_new(b));
     int i = 1;
     while ((v = pz_ary_iterate(b, x, &i)).s) 
         pz_ary_push(b, vars, pz_eval2(v, env, 0));
@@ -372,12 +372,15 @@ Id pz_list(VB, Id x) { return x; }
 Id pz_list_p(VB, Id x) { return cb(pz_is_type_i(x, PZ_TYPE_ARRAY)); }
 Id pz_null_p(VB, Id x) { return cb(cnil(x)); }
 Id pz_symbol_p(VB, Id x) { return cb(pz_is_type_i(x, PZ_TYPE_SYMBOL)); }
-Id pz_display(VB, Id x) { printf("%s", pz_string_ptr(pz_ary_join_by_s(b, 
-    pz_ary_map(b, x, pz_to_string), S(" ")))); fflush(stdout); return pzNil;}
+Id pz_display(VB, Id x) { 
+  printf("%s", pz_string_ptr(pz_ary_join_by_s(b, 
+    pz_ary_map(b, x, pz_to_string), IS(" ")))); 
+  fflush(stdout); 
+  return pzNil;
+}
 Id pz_newline(VB, Id x) { printf("\n"); return pzNil;}
 Id pz_resetline(VB, Id x) { printf("\r"); fflush(stdout); return pzNil;}
 Id pz_current_ms(VB, Id x) { return pz_int((int)pz_current_time_ms());}
-Id __pz_perf_show(VB, Id x) { pz_perf_show();return pzNil;}
 Id pz_make_hash(VB, Id x) { return pz_ht_new(b); }
 Id pz_hash_set(VB, Id x) { return pz_ht_set(b, ca_f(x), ca_s(x), ca_th(x)); }
 Id pz_hash_get(VB, Id x) { return pz_ht_get(b, ca_f(x), ca_s(x)); }
@@ -396,7 +399,7 @@ Id _pz_string_split(VB, Id x) {
 
 Id pz_vector_each(VB, Id x) { 
   Id this = pzNil;
-  Id e = pz_env_new(b, env);
+  Id e = pz_retain0(pz_env_new(b, env));
   Id lambda = ca_s(x);
   Id vdecl, pn;
   int l;
@@ -409,14 +412,16 @@ Id pz_vector_each(VB, Id x) {
   Id v;
   while ((v = pz_ary_iterate(b, ca_f(x), &i)).s) {
     if (pz_is_type_i(lambda, PZ_TYPE_CFUNC)) {
-      Id vars = pz_ary_new(b);
+      Id vars = pz_retain0(pz_ary_new(b));
       pz_ary_push(b, vars, v);
       pz_call(b, lambda, e, vars);
+      pz_release(vars);
     } else {
       if (pn.s) pz_ht_set(b, e, pn, v);
       pz_eval(b, ca_s(lambda), e, pzNil, pzNil, 0);
     }
   }
+  pz_release(e);
   return pzNil;
 }
 
@@ -470,21 +475,22 @@ Id pz_boolean_p(VB, Id x) { return cb(PZ_TYPE(ca_f(x)) == PZ_TYPE_BOOL); }
 char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms",
-    "perf-show", "make-hash", "hash-set!", "hash-get", "make-vector",
-    "vector-get", "vector-set!", "vector-push!", "vector-pop!", "vector-unshift!",
-    "vector-len", "string-ref", "string-split", "vector-each", "hash-each",
-    "rx-match-string", "rand", "<<", ">>", "and", "or", "not", "sleep",
-    "|", "&", "^", "type-of", "string->number", "boolean?", 0};
+    "make-hash", "hash-set!", "hash-get", "make-vector", "vector-get",
+    "vector-set!", "vector-push!", "vector-pop!", "vector-unshift!",
+    "vector-len", "string-ref", "string-split", "vector-each",
+    "hash-each", "rx-match-string", "rand", "<<", ">>", "and", "or",
+    "not", "sleep", "|", "&", "^", "type-of", "string->number",
+    "boolean?", 0};
 
 Id (*pz_std_f[])(void *b, Id, Id) = {pz_add, pz_sub, pz_mul, pz_div, 
     pz_gt, pz_lt, pz_ge, pz_le, pz_eq, pz_eq, pz_eq, pz_length, pz_cons,
     pz_car, pz_cdr, pz_list, pz_list_p, pz_null_p, pz_symbol_p,
-    pz_display, pz_newline, pz_resetline, pz_current_ms, __pz_perf_show,
-    pz_make_hash, pz_hash_set, pz_hash_get, pz_make_vector, pz_vector_get,
+    pz_display, pz_newline, pz_resetline, pz_current_ms, pz_make_hash,
+    pz_hash_set, pz_hash_get, pz_make_vector, pz_vector_get,
     pz_vector_set, pz_vector_push, pz_vector_pop, pz_vector_unshift,
     pz_vector_len, pz_string_ref, _pz_string_split, pz_vector_each,
     pz_hash_each, _pz_rx_match_string, pz_rand, pz_shl, pz_shr, pz_and,
-    pz_or, pz_not, pz_sleep, pz_b_or, pz_b_and, pz_b_xor, pz_type_of, 
+    pz_or, pz_not, pz_sleep, pz_b_or, pz_b_and, pz_b_xor, pz_type_of,
     pz_string_to_number, pz_boolean_p, 0};
 
 
@@ -494,7 +500,7 @@ void pz_add_std_functions(void *b, Id env) {
 }
 
 void pz_add_perf_symbols(void *b) {
-  S_icounter = IS("icounter");
+  //S_icounter = IS("icounter");
 }
 
 void pz_add_globals(void *b, Id env) {
@@ -514,19 +520,22 @@ Id pz_to_string(void *b, Id exp) {
 }
 
 void pz_repl(void *b, FILE *f, Id filename, int interactive) {
-  pz_retain(pzNil, filename);
+  pz_retain0(filename);
   while (1) {
     stack_overflow = 0;
     nested_depth = 0;
     Id parsed = pz_retain(filename, pz_parse(b, 
-        pz_input(b, f, interactive, pz_perf_mode ? "perf>" :  "ponzi> ")));
+        pz_input(b, f, interactive, pz_perf_mode ? "perf>" : "ponzi> ")));
     Id val = pz_eval(b, parsed, pz_globals, filename, pzNil, 1);
     pz_release(parsed);
     if (feof(f)) break;
-    if (interactive) printf("===> %s\n", pz_string_ptr(pz_to_string(b, val)));
+    Id s;
+    if (interactive) 
+        printf("===> %s\n", pz_string_ptr(pz_to_string(b, val)));
     pz_garbage_collect_full(b);
-    //pz_mem_dump(b);
-    //pz_mem_dump(b);
+    pz_garbage_collect_full(b);
+    pz_garbage_collect_full(b);
+    pz_mem_dump(b);
   }
   pz_release(filename);
 }
