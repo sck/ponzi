@@ -21,7 +21,7 @@ Id pz_string_parse(void *b, Id s) {
       pz_ary_push(b, r, v);
     } else {
       int i = pz_register_string_ref(b, v);
-      Id sr = IS("(string-ref ");
+      Id sr = S("(string-ref ");
       pz_string_append(b, sr, pz_string_new_number(b, pz_int(i)));
       pz_string_append(b, sr, IS(")"));
       pz_ary_push(b, r, sr);
@@ -130,12 +130,12 @@ next_token:
     Id l = pz_ary_new(b);
     while (!pz_string_equals_cp_i(ca_f(tokens), ")")) {
         pz_ary_push(b, l, __pz_read_from(b, tokens)); CE(break) }
-    pz_ary_unshift(b, tokens);
+    pz_release_ja(pz_ary_unshift(b, tokens));
     RETURN(l);
   } else if (pz_string_equals_cp_i(token, ")")) {
     RETURN(pz_handle_error_with_err_string_nh(__FUNCTION__, 
         "unexpected )"));
-  } else RETURN(pz_atom(b, token));
+  } else { RETURN(pz_atom(b, token)); }
 
 finish:
   pz_release(token);
@@ -162,6 +162,11 @@ Id pz_parse(void *b, Id va_s) {
   return r;
 }
 
+int pz_perf_observe_hotspots_p() {
+  void *b = pz_perf;
+  return pz_ht_get(b, pz_perf_dict, IS("observe-hotspots")).s;
+}
+
 #define DC2B(va) pz_deep_copy(b, pz_perf, va)
 #define DC2P(va) pz_deep_copy(pz_perf, b, va)
 #define pz_eval2(x, e, l) pz_eval(b, x, e, _this, _this, l)
@@ -170,6 +175,9 @@ size_t stack_overflow = 0;
 size_t rc_count = 0;
 Id pz_begin(void *b, Id x, int start, Id _env, Id _this, Id previous);
 Id pz_eval(void *b, Id x, Id _env, Id _this, Id previous, int last) {
+  if (pz_perf_observe_hotspots_p()) {
+    printf("Would observe hotspots!\n");
+  }
   Id x0, exp, val, var, vars, rv, env;
   nested_depth++;
   if (stack_overflow) return pzNil;
@@ -177,8 +185,9 @@ Id pz_eval(void *b, Id x, Id _env, Id _this, Id previous, int last) {
     printf("STACKoverflow\n");
     stack_overflow = 1;
   }
+  //RetainGuard0(_env);
   pz_retain0(_env);
-  pz_garbage_collect(b);
+  //pz_garbage_collect(b);
   Id func_name = pzNil;
 tail_rc_start:
   val= pzNil; vars = pzNil; rv = pzNil;
@@ -186,6 +195,7 @@ tail_rc_start:
   env = (_env.s ? _env : pz_globals);
   if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
     if (pz_string_equals_cp_i(x, "globals")) RETURN(pz_globals);
+    if (pz_string_equals_cp_i(x, "perf-dict")) RETURN(pz_perf_dict);
     if (pz_string_equals_cp_i(x, "string-interns")) RETURN(pz_string_interns);
     if (pz_string_equals_cp_i(x, "symbol-interns")) RETURN(pz_symbol_interns);
     if (pz_string_equals_cp_i(x, "string-refs")) RETURN(pz_string_refs);
@@ -199,21 +209,22 @@ tail_rc_start:
   if (PZ_TYPE(x) == PZ_TYPE_ARRAY && pz_ary_len(b, x) == 3) {
     Id m = ca_s(x);
     if (PZ_TYPE(m) == PZ_TYPE_SYMBOL && pz_string_equals_cp_i(m, ".")) {
-      Id a = pz_retain0(pz_ary_new(b));
+      Id a = pz_ary_new(b);
       pz_ary_push(b, a, pz_eval2(ca_f(x), env, 0));
       pz_ary_push(b, a, pz_eval2(ca_th(x), env, 1));
-      pz_release(a);
       RETURN(a);
     }
   }
   if (pz_ary_len(b, x) == 0) {
+    RG(sg);
     RETURN(pz_handle_error_with_err_string(__FUNCTION__, "No proc given", 
-        pz_string_ptr(pz_to_string(b, func_name)))); 
+        pz_string_ptr(sg = pz_to_string(b, func_name)))); 
   }
   x0 = ca_f(x);
   if (!pz_is_string(x0)) {
+    RG(sg);
     RETURN(pz_handle_error_with_err_string(__FUNCTION__, "Not a symbol type", 
-        pz_string_ptr(pz_to_string(b, func_name)))); 
+        pz_string_ptr(sg = pz_to_string(b, func_name)))); 
   }
   if (pz_string_equals_cp_i(x0, "quote")) {
     RETURN(ca_s(x));
@@ -250,22 +261,25 @@ tail_rc_start:
         DC2P(_this), DC2P(_this))));
   } else {  // (proc exp*)
     Id v;
-    vars = pz_retain0(pz_ary_new(b));
+    RG(gv);
+    Id vars = gv = pz_ary_new(b);
     int i = 1;
     while ((v = pz_ary_iterate(b, x, &i)).s) 
         pz_ary_push(b, vars, pz_eval2(v, env, 0));
     func_name = x0;
     Id lambda = pz_env_find(b, env, func_name);
     if (!lambda.s) { 
+      RG(sg);
       RETURN(pz_handle_error_with_err_string(__FUNCTION__, "Unknown proc", 
-          pz_string_ptr(pz_to_string(b, func_name)))); 
+          pz_string_ptr(sg = pz_to_string(b, func_name)))); 
     }
     if (pz_is_type_i(lambda, PZ_TYPE_CFUNC)) {
       RETURN(pz_call(b, lambda, env, vars));
     }
     int tail_rc = 0;
     if (pz_equals_i(func_name, _this)) tail_rc = last;
-    Id e = tail_rc ? env : pz_env_new(b, pz_ary_index(b, lambda, 2)), p;
+    RG(eg);
+    Id e = tail_rc ? env : (eg = pz_env_new(b, pz_ary_index(b, lambda, 2))), p;
     Id vdecl = pz_ary_index(b, lambda, 0);
     if (PZ_TYPE(vdecl) == PZ_TYPE_ARRAY) {
       if (pz_ary_len(b, vdecl) != pz_ary_len(b, vars))  {
@@ -302,8 +316,10 @@ Id pz_begin(void *b, Id x, int start, Id env, Id _this, Id previous) {
   pz_retain(_this, previous);
   pz_retain(x, env);
   pz_retain(_this, x);
-  while ((exp = pz_ary_iterate(b, x, &i)).s) 
+  while ((exp = pz_ary_iterate(b, x, &i)).s) {
     val = pz_eval(b, exp, env, _this, previous, l == i);
+    if (l == i) pz_retain0(val);
+  }
   pz_release(_this);
   pz_release(previous);
   pz_release(x);
@@ -365,15 +381,14 @@ Id pz_cons(VB, Id x) { Id a = ca_f(x); Id r = pz_ary_new(b);
     return r; }
 Id pz_car(VB, Id x) { return ca_f(ca_f(x)); }
 Id pz_cdr(VB, Id x) { Id a = ca_f(x); return pz_ary_index(b, a, -1); }
-Id pz_list(VB, Id x) { return x; }
+Id pz_list(VB, Id x) { return pz_ary_clone(b, x); }
 Id pz_list_p(VB, Id x) { return cb(pz_is_type_i(x, PZ_TYPE_ARRAY)); }
 Id pz_null_p(VB, Id x) { return cb(cnil(x)); }
 Id pz_symbol_p(VB, Id x) { return cb(pz_is_type_i(x, PZ_TYPE_SYMBOL)); }
 Id pz_display(VB, Id x) { 
-  Id s;
-  printf("%s", pz_string_ptr(s = pz_ary_join_by_s(b, 
+  RG(sg);
+  printf("%s", pz_string_ptr(sg = pz_ary_join_by_s(b, 
     pz_ary_map(b, x, pz_to_string), IS(" ")))); 
-  pz_release_ja(s);
   fflush(stdout); 
   return pzNil;
 }
@@ -525,14 +540,14 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
     nested_depth = 0;
     Id parsed = pz_retain(filename, pz_parse(b, 
         pz_input(b, f, interactive, pz_perf_mode ? "perf>" : "ponzi> ")));
-    Id val = pz_eval(b, parsed, pz_globals, filename, pzNil, 1);
+    Id val = pz_retain0(pz_eval(b, parsed, pz_globals, filename, pzNil, 1));
     pz_release(parsed);
     if (feof(f)) break;
     if (interactive) {
-      Id s;
-      printf("===> %s\n", pz_string_ptr(s = pz_retain0(pz_to_string(b, val))));
-      pz_release_ja(s);
+      RG(sg);
+      printf("===> %s\n", pz_string_ptr(sg = pz_to_string(b, val)));
     }
+    pz_release(val);
     pz_garbage_collect_full(b);
     //pz_garbage_collect_full(b);
     //pz_garbage_collect_full(b);
