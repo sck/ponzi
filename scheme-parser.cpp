@@ -105,13 +105,13 @@ Id __pz_read_from(void *b, Id tokens) {
   Id rv = pzNil;
   int quote = 0;
 
-  pz_reset_errors(b);
+  pz_reset_errors();
   if (!tokens.s) return pzNil;
   Id token = pzNil;
 next_token:
   if (pz_ary_len(b, tokens) == 0) 
-      return pz_handle_error_with_err_string_nh(__FUNCTION__, 
-          "unexpected EOF while reading");
+      RETURN(pz_handle_error_with_err_string_nh(__FUNCTION__, 
+          "unexpected EOF while reading"));
   do {
    pz_release(token);
    token = pz_retain0(pz_ary_unshift(b, tokens));
@@ -120,9 +120,9 @@ next_token:
     Id word = pz_retain0(pz_string_sub_str_new(b, token, 1, -1));
     quote = 1;
     if (pz_string_len(b, word) > 0) {
+      pz_release(token);
       token = word; 
     } else {
-      pz_release(token);
       goto next_token;
     }
   }
@@ -133,8 +133,8 @@ next_token:
     pz_ary_unshift(b, tokens);
     RETURN(l);
   } else if (pz_string_equals_cp_i(token, ")")) {
-    return pz_handle_error_with_err_string_nh(__FUNCTION__, 
-        "unexpected )");
+    RETURN(pz_handle_error_with_err_string_nh(__FUNCTION__, 
+        "unexpected )"));
   } else RETURN(pz_atom(b, token));
 
 finish:
@@ -164,12 +164,12 @@ Id pz_parse(void *b, Id va_s) {
 
 #define DC2B(va) pz_deep_copy(b, pz_perf, va)
 #define DC2P(va) pz_deep_copy(pz_perf, b, va)
-#define pz_eval2(x, e, l) pz_eval(b, x, e, this, this, l)
+#define pz_eval2(x, e, l) pz_eval(b, x, e, _this, _this, l)
 size_t nested_depth = 0;
 size_t stack_overflow = 0;
 size_t rc_count = 0;
-Id pz_begin(void *b, Id x, int start, Id _env, Id this, Id previous);
-Id pz_eval(void *b, Id x, Id _env, Id this, Id previous, int last) {
+Id pz_begin(void *b, Id x, int start, Id _env, Id _this, Id previous);
+Id pz_eval(void *b, Id x, Id _env, Id _this, Id previous, int last) {
   Id x0, exp, val, var, vars, rv, env;
   nested_depth++;
   if (stack_overflow) return pzNil;
@@ -177,14 +177,12 @@ Id pz_eval(void *b, Id x, Id _env, Id this, Id previous, int last) {
     printf("STACKoverflow\n");
     stack_overflow = 1;
   }
-  //D("x", x);
   pz_retain0(_env);
   pz_garbage_collect(b);
   Id func_name = pzNil;
 tail_rc_start:
   val= pzNil; vars = pzNil; rv = pzNil;
   if (!x.s) RETURN(pzNil);
-  //printf("START: %x %lx\n", PZ_ADR(vars), &vars);
   env = (_env.s ? _env : pz_globals);
   if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
     if (pz_string_equals_cp_i(x, "globals")) RETURN(pz_globals);
@@ -244,12 +242,12 @@ tail_rc_start:
     pz_ary_push(b, l, c); pz_ary_push(b, l, env);
     RETURN(l);
   } else if (pz_string_equals_cp_i(x0, "begin")) {  // (begin exp*)
-    RETURN(pz_begin(b, x, 1, env, this, this));
+    RETURN(pz_begin(b, x, 1, env, _this, _this));
   } else if (pz_string_equals_cp_i(x0, "begin-perf")) {  // (begin-perf exp*)
     if (b == pz_perf) return pzNil;
     RETURN(DC2B(pz_begin(pz_perf, DC2P(x), 1, 
         env.s == pz_globals.s ? pzNil : DC2P(env), //DC2P(env), 
-        DC2P(this), DC2P(this))));
+        DC2P(_this), DC2P(_this))));
   } else {  // (proc exp*)
     Id v;
     vars = pz_retain0(pz_ary_new(b));
@@ -259,8 +257,6 @@ tail_rc_start:
     func_name = x0;
     Id lambda = pz_env_find(b, env, func_name);
     if (!lambda.s) { 
-      D("x", x);
-      D("func_name", func_name);
       RETURN(pz_handle_error_with_err_string(__FUNCTION__, "Unknown proc", 
           pz_string_ptr(pz_to_string(b, func_name)))); 
     }
@@ -268,7 +264,7 @@ tail_rc_start:
       RETURN(pz_call(b, lambda, env, vars));
     }
     int tail_rc = 0;
-    if (pz_equals_i(func_name, this)) tail_rc = last;
+    if (pz_equals_i(func_name, _this)) tail_rc = last;
     Id e = tail_rc ? env : pz_env_new(b, pz_ary_index(b, lambda, 2)), p;
     Id vdecl = pz_ary_index(b, lambda, 0);
     if (PZ_TYPE(vdecl) == PZ_TYPE_ARRAY) {
@@ -286,29 +282,29 @@ tail_rc_start:
       pz_ht_set(b, e, vdecl, vars);
     }
     if (tail_rc) RETURN(pzTail);
-    Id r =  pz_eval(b, pz_ary_index(b, lambda, 1), e, func_name, this, 0);
+    Id r =  pz_eval(b, pz_ary_index(b, lambda, 1), e, func_name, _this, 0);
     RETURN(r);
   }
 
 finish:
   pz_release(vars);
-  if (rv.s == pzTail.s && !pz_equals_i(this, previous)) { goto tail_rc_start; }
+  if (rv.s == pzTail.s && !pz_equals_i(_this, previous)) { goto tail_rc_start; }
   pz_release(_env);
   nested_depth--;
   return rv;
 }
 
-Id pz_begin(void *b, Id x, int start, Id env, Id this, Id previous) {
+Id pz_begin(void *b, Id x, int start, Id env, Id _this, Id previous) {
   Id val = pzNil, exp;
   int i = start;
   int l = pz_ary_len(b, x);
-  pz_retain(this, this);
-  pz_retain(this, previous);
+  pz_retain(_this, _this);
+  pz_retain(_this, previous);
   pz_retain(x, env);
-  pz_retain(this, x);
+  pz_retain(_this, x);
   while ((exp = pz_ary_iterate(b, x, &i)).s) 
-    val = pz_eval(b, exp, env, this, previous, l == i);
-  pz_release(this);
+    val = pz_eval(b, exp, env, _this, previous, l == i);
+  pz_release(_this);
   pz_release(previous);
   pz_release(x);
   pz_release(env);
@@ -340,14 +336,15 @@ Id  __try_convert_to_ints(void *b, Id x) {
   int t = (pz_ary_contains_only_type_i(b, x, PZ_TYPE_INT) ? 1 : \
       (pz_ary_contains_only_type_i(b, x, PZ_TYPE_FLOAT) ? 2 : 0)); \
   if (t == 0) { \
-      Id try = __try_convert_to_ints(b, x);  \
-      if (try.s) { t = 1; x = try; }} \
+      Id _try = __try_convert_to_ints(b, x);  \
+      if (_try.s) { t = 1; x = _try; }} \
   if (t == 0) { \
-      Id try = __try_convert_to_floats(b, x);  \
-      if (try.s) { t = 2; x = try; }} \
+      Id _try = __try_convert_to_floats(b, x);  \
+      if (_try.s) { t = 2; x = _try; }} \
   int ai = PZ_INT(ca_f(x)); int bi = PZ_INT(ca_s(x)); \
   float af = PZ_FLOAT(ca_f(x)); float bf = PZ_FLOAT(ca_s(x)); \
   Id r = pzNil; \
+  ai = ai; bi = bi; bf = bf; af = af;\
   if (t == 1) { 
 #define ON_F ; } else if (t == 2) {
 #define R  ; } return r;
@@ -373,8 +370,10 @@ Id pz_list_p(VB, Id x) { return cb(pz_is_type_i(x, PZ_TYPE_ARRAY)); }
 Id pz_null_p(VB, Id x) { return cb(cnil(x)); }
 Id pz_symbol_p(VB, Id x) { return cb(pz_is_type_i(x, PZ_TYPE_SYMBOL)); }
 Id pz_display(VB, Id x) { 
-  printf("%s", pz_string_ptr(pz_ary_join_by_s(b, 
+  Id s;
+  printf("%s", pz_string_ptr(s = pz_ary_join_by_s(b, 
     pz_ary_map(b, x, pz_to_string), IS(" ")))); 
+  pz_release_ja(s);
   fflush(stdout); 
   return pzNil;
 }
@@ -398,7 +397,7 @@ Id _pz_string_split(VB, Id x) {
     return pz_string_split2(b, ca_f(x), ca_s(x)); }
 
 Id pz_vector_each(VB, Id x) { 
-  Id this = pzNil;
+  Id _this = pzNil;
   Id e = pz_retain0(pz_env_new(b, env));
   Id lambda = ca_s(x);
   Id vdecl, pn;
@@ -426,7 +425,7 @@ Id pz_vector_each(VB, Id x) {
 }
 
 Id pz_hash_each(VB, Id x) { 
-  Id this = pzNil;
+  Id _this = pzNil;
   Id e = pz_env_new(b, env);
   Id lambda = ca_s(x);
   Id vdecl = ca_f(lambda);
@@ -472,7 +471,7 @@ Id pz_type_of(VB, Id x) { return S(pz_type_to_cp(PZ_TYPE(ca_f(x)))); }
 Id pz_string_to_number(VB, Id x) { return pz_numberize(b, ca_f(x)); }
 Id pz_boolean_p(VB, Id x) { return cb(PZ_TYPE(ca_f(x)) == PZ_TYPE_BOOL); }
 
-char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
+const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
     "null?", "symbol?", "display", "newline", "resetline", "current-ms",
     "make-hash", "hash-set!", "hash-get", "make-vector", "vector-get",
@@ -529,12 +528,14 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
     Id val = pz_eval(b, parsed, pz_globals, filename, pzNil, 1);
     pz_release(parsed);
     if (feof(f)) break;
-    Id s;
-    if (interactive) 
-        printf("===> %s\n", pz_string_ptr(pz_to_string(b, val)));
+    if (interactive) {
+      Id s;
+      printf("===> %s\n", pz_string_ptr(s = pz_retain0(pz_to_string(b, val))));
+      pz_release_ja(s);
+    }
     pz_garbage_collect_full(b);
-    pz_garbage_collect_full(b);
-    pz_garbage_collect_full(b);
+    //pz_garbage_collect_full(b);
+    //pz_garbage_collect_full(b);
     pz_mem_dump(b);
   }
   pz_release(filename);

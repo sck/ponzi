@@ -1,3 +1,3 @@
 #! /bin/sh -v
-gcc -g -o ponzi.bin ponzi.c
-gcc -g -o perf.bin ponzi.c
+g++ -Wall -g -o ponzi.bin ponzi.cpp
+g++ -Wall -g -o perf.bin ponzi.cpp
