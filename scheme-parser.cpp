@@ -549,6 +549,7 @@ Id pz_dump(VB) {
     pz_print_dump(b, ca_s(x), PZ_DUMP_DEBUG | PZ_DUMP_RECURSE); 
     printf("\n");
     return pz_retain0(ca_s(x)); }
+Id pz_vector_append(VB) { return pz_ary_new_join(b, ca_f(x), ca_s(x)); }
 
 const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
@@ -560,7 +561,7 @@ const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "<<", ">>", "and", "or", "not", "sleep", "|", "&", "^", "type-of",
     "string->number", "boolean?", "load", "eval", "procedure?",
     "string->symbol", "string-append", "string-copy", "make-string",
-    "inspect", "dump", 0};
+    "inspect", "dump", "vector-append", 0};
 
 Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div, 
     pz_gt, pz_lt, pz_ge, pz_le, pz_eq, pz_eq, pz_eq, pz_length, pz_cons,
@@ -574,7 +575,7 @@ Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div,
     pz_b_and, pz_b_xor, pz_type_of, pz_string_to_number, pz_boolean_p,
     __pz_load, __pz_eval, pz_procedure_p, pz_string_to_symbol,
     __pz_string_append, pz_string_copy, pz_make_string, pz_inspect, 
-    pz_dump, 0};
+    pz_dump, pz_vector_append, 0};
 
 
 void pz_add_std_functions(void *b, Id env) {
@@ -620,7 +621,7 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
       printf("===> %s\n", pz_string_ptr(sg = pz_to_string(b, val)));
     }
     pz_release(val);
-    pz_mem_dump(b);
+    //pz_mem_dump(b);
   }
   pz_release(filename);
 }

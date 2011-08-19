@@ -30,21 +30,26 @@
 (t (eq? (string-append "1" "2") "12"))
 (string-copy "foo")
 
-(t (eq? (cond ((> 3 2) 'greater) ((< 3 2) 'smaller)) 'greater))
-(t (eq? (cond ((> 2 3) 'greater) ((< 1 2) 'smaller)) 'smaller))
-(t (eq? (cond ((> 2 3) 'greater) ((< 2 2) 'smaller) (else 'nothing)) 'nothing))
+(t (eq? (cond ((> 3 2) 'something 'greater) ((< 3 2) 'smaller)) 'greater))
+(t (eq? (cond ((> 2 3) 'greater) ((< 1 2) 'something 'smaller)) 'smaller))
+(t (eq? (cond ((> 2 3) 'greater) ((< 2 2) 'smaller) (else 'not 'nothing)) 'nothing))
 
 (t (eq? (length (list 1 2 3)) 3))
 (t (eq? (list-ref (list 1 2 3) 1) 2))
 (t (eq? (find (list 2 2 3 4) odd?) 3))
 (t (eq? (first (list 1 2)) 1))
 ;(t (eq? (rest (list 1 2 3)) (list 2 3)))
+;(t (eq? (append (list 1 2) (list 3 4)) (list 1 2 3 4)))
 (t (zero? 0))
 
-(t (eq? (case (* 2 3)
-  ((2 3 5 7) 'prime)
-  ((1 4 6 8 9) 'composite)) 'composite))
 
+
+(t (eq? (case (* 2 3)
+  ((2 3 5 7) 'test 'prime)
+  ((1 4 6 8 9) 'test 'composite)) 'composite))
+
+(t (eq? (let* ((a 1) (b (* 2 3))) b) 6))
+(t (eq? (let ((a 1) (b (* 2 3))) b) 6))
 
 ;(t (begin (define s (make-string)) ((eq? (string-copy "1")
 

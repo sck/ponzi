@@ -1409,7 +1409,7 @@ void __ary_retain_all(void *b, Id from, pz_array_t *a) {
 Id __pz_ary_clone(void *b, Id va_s, int start, int count) {
   pz_array_t *ary_s; 
   PZ_TYPED_VA_TO_PTR(pz_array_t, ary_s, va_s, PZ_TYPE_ARRAY, pzNil);
-  Id va_c; PZ_ALLOC(va_c, PZ_TYPE_ARRAY);
+  Id va_c; PZ_ALLOC(va_c, PZ_TYPE_ARRAY); pz_zero(b, va_c); 
   char *p_c = VA_TO_PTR(va_c), *p_s = VA_TO_PTR(va_s);
   memcpy(p_c, p_s, PZ_CELL_SIZE);
   pz_array_t *a = (pz_array_t *)p_c;
@@ -1432,17 +1432,22 @@ int pz_ary_free(void *b, Id va_ary) {
 }
 
 Id pz_ary_new_join(void *b, Id a, Id o) {
+  //D("a", a); D("o", o);
   pz_array_t *aa; PZ_TYPED_VA_TO_PTR(pz_array_t, aa, a, PZ_TYPE_ARRAY, pzNil);
   pz_array_t *ab; PZ_TYPED_VA_TO_PTR(pz_array_t, ab, o, PZ_TYPE_ARRAY, pzNil);
-  Id n; PZ_ALLOC(n, PZ_TYPE_ARRAY);
+  Id n; PZ_ALLOC(n, PZ_TYPE_ARRAY); pz_zero(b, n); 
   pz_array_t *an; PZ_TYPED_VA_TO_PTR(pz_array_t, an, n, PZ_TYPE_ARRAY, pzNil);
   int aas = aa->size - aa->start;
   an->size = aas + ab->size - ab->start;
   PZ_CHECK_ERROR((an->size >= PZ_ARY_MAX_ENTRIES), "array is full", pzNil);
-  memcpy(&an->va_entries, &aa->va_entries + aa->start, aas * sizeof(Id));
-  memcpy(&an->va_entries[aas + 1], &ab->va_entries + ab->start, 
+  //printf("aas: %d\n", aas);
+  //printf("aastart: %d\n", aa->start);
+  //printf("abstart: %d\n", ab->start);
+  memcpy(&an->va_entries, &aa->va_entries[aa->start], aas * sizeof(Id));
+  memcpy(&an->va_entries[aas], &ab->va_entries[ab->start], 
       (ab->size - ab->start) * sizeof(Id));
   __ary_retain_all(b, n, an);
+  //D("n", n);
   return n;
 }
 
