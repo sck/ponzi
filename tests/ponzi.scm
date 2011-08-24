@@ -11,3 +11,5 @@ t
 (f (any? (list 1 2 4 'a 10) 'f))
 (t (eq? (list-tail (list 1 2 3) 1) (list 2 3)))
 
+(t-eq (first (list 1 2)) 1)
+(t-eq (find (list 2 2 3 4) odd?) 3)

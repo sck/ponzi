@@ -1,7 +1,13 @@
+(define p inspect)
+(define find vector-find)
+(define or (lambda-no-parameter-eval xs 
+    (define ror #f) (find xs (lambda (v) (if (eval v) (set! ror #t) #f))) ror))
+(define and (lambda-no-parameter-eval xs 
+    (define rand #t) (find xs (lambda (v) (if (eval v) #f (begin (set!  rand #f) #t))))
+    rand))
 (define first car)
 (define rest cdr)
 (define for-each vector-each)
-(define find vector-find)
 (define list-ref vector-get)
 (define length vector-length)
 (define list-tail vector-tail)
@@ -11,8 +17,7 @@
 (define zero? (lambda (n) (eq? n 0)))
 (define any? (lambda (l v) 
     (define rany #f)
-    (find l (lambda (x) (if (eq? x v) (begin (set! rany #t) #t) #f)))
-    rany))
+    (find l (lambda (x) (if (eq? x v) (set! rany #t) #f))) rany))
 
 (define displayln (lambda xs (for-each xs display) (newline)))
 (define #hash (lambda xs 
@@ -24,19 +29,18 @@
     (define bindings (first xs))
     (eval (begin 
       (define a (make-vector)) 
-      (vector-push! a 'begin) 
-      (vector-each bindings (lambda (v) 
-          (vector-push! a (list 'define (list-ref v 0) (eval (list-ref v 1)))))) 
+      (vector-push! a 'begin)
+      (for-each bindings (lambda (v) 
+          (vector-push! a (list 'define (list-ref v 0) (eval (list-ref v 1))))))
       a))
     (eval (append '(begin) (list-tail xs 1)))))
-
 (define let let*)
 
 (define cond (lambda-no-parameter-eval xs
     (define rcond #f)
-    (find xs (lambda (x) 
+    (find xs (lambda (x)
         (define t (first x))
-        (if (or (eq? t 'else) (eval t)) 
+        (if (or (eq? t 'else) (eval t))
             (begin (set! rcond (eval (append '(begin) (list-tail x 1)))) #t)
             #f)))
     rcond))
@@ -44,14 +48,14 @@
 (define case (lambda-no-parameter-eval xs
     (define rcase #f)
     (define value (eval (first xs)))
-    (find (list-tail xs 1) (lambda (x) 
+    (find (list-tail xs 1) (lambda (x)
         (define list (first x))
-        (if (or (eq? list 'else) (any? list value)) 
+        (if (or (eq? list 'else) (any? list value))
             (begin (set! rcase (eval (append '(begin) (list-tail x 1)))) #t)
             #f)))
     rcase))
 
-(define int-times (lambda (n l m) 
+(define int-times (lambda (n l m)
     (l (- m n)) 
     (if (<= n 1) 0 (int-times (- n 1) l m))))
 
@@ -62,6 +66,8 @@
     (vector-each vector (lambda (x) 
       (vector-push! a (l x)))) 
    a))
+
+(define map vector-map)
 
 (define vector-grep (lambda (vector rx)
   (define a (make-vector))
@@ -80,4 +86,6 @@
   (displayln (quote ms))))
 
 
-;(load "compiler.scm")
+(load "compiler.scm")
+
+
