@@ -35,6 +35,8 @@
   )
   (supports "times" 
     (times 2 (lambda (n) 0)))
+  (supports "floating-point numbers" 
+    (t (< (- (+ 2.0 3.0) 5.0) 0.001)))
 )
 
 

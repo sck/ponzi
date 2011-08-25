@@ -53,20 +53,20 @@ typedef size_t Id;
 #define PZ_TYPE_SET(va, v) va = (va & 0xFFFFFFFFFFFFFF00) | ((char) v)
 #define PZ_LONG(va) size_t(va >> 8)
 #define PZ_LONG_SET(va, v) va = (va & 0x00000000000000FF) | ((size_t) v << 8)
-#define PZ_DOUBLE(va) __pz_double(va)
-#define PZ_DOUBLE_SET(va, v) __pz_double_set(va, v)
+#define PZ_FLOAT(va) __pz_float(va)
+#define PZ_FLOAT_SET(va, v) __pz_float_set(va, v)
 #define PZ_CHAR(va) size_t(va >> 56)
 #define PZ_CHAR_SET(va, v) va = (va & 0x00FFFFFFFFFFFFFF) | ((size_t) v << 56)
 
-inline double __pz_double(Id va) {
-  int fv = va >> 8;
-  double f = (float &)fv;
+inline float __pz_float(Id va) {
+  size_t fv = va >> 32;
+  float f = (float &)fv;
   return f;
 }
 
-inline void __pz_double_set(Id &va, double v) {
-  int i = (int &)v;
-  PZ_LONG_SET(va, i);
+inline void __pz_float_set(Id &va, float v) {
+  size_t i = (size_t &)v;
+  va = (va & 0x00000000FFFFFFFF) | ((size_t)i  << 32);
 }
 
 
@@ -232,7 +232,7 @@ open_failed:
 #endif
 
 #define PZ_TYPE_BOOL 0
-#define PZ_TYPE_DOUBLE 1
+#define PZ_TYPE_FLOAT 1
 #define PZ_TYPE_LONG 2
 #define PZ_TYPE_CHAR 3
 #define PZ_TYPE_SPECIAL 4
@@ -560,7 +560,7 @@ Id show_rc(const char *m, void *b, Id va) {
 int pz_free(void *b, Id va) {
   show_rc("pz_free", b, va);
   int t = PZ_TYPE(va);
-  if (t == PZ_TYPE_BOOL || t == PZ_TYPE_DOUBLE || t == PZ_TYPE_LONG) return 0;
+  if (t == PZ_TYPE_BOOL || t == PZ_TYPE_FLOAT || t == PZ_TYPE_LONG) return 0;
   char *used_chunk_p = VA_TO_PTR(va); P_0_R(used_chunk_p, 0);
   pz_mem_chunk_descriptor_t *mcd_used_chunk = 
       (pz_mem_chunk_descriptor_t *)used_chunk_p;
@@ -585,8 +585,8 @@ finish:
 Id pz_long(size_t i) { 
     Id va; PZ_TYPE_SET(va, PZ_TYPE_LONG); PZ_LONG_SET(va, i); return va; }
 
-Id pz_double(double f) { 
-    Id va; PZ_TYPE_SET(va, PZ_TYPE_DOUBLE); PZ_DOUBLE_SET(va, f); return va; }
+Id pz_float(double f) { 
+    Id va; PZ_TYPE_SET(va, PZ_TYPE_FLOAT); PZ_FLOAT_SET(va, f); return va; }
 
 Id cn(Id v) { return PZ_TYPE(v) == PZ_TYPE_BOOL ? pz_long(v ? 1 : 0) : v; }
 
@@ -595,9 +595,9 @@ Id cn(Id v) { return PZ_TYPE(v) == PZ_TYPE_BOOL ? pz_long(v ? 1 : 0) : v; }
  */
 
 
-const char *pz_types_s[] = {"nil", "float", "int", "special", "string",
+const char *pz_types_s[] = {"nil", "float", "long", "char", "special", "string",
     "symbol", "cfunc", "hash", "hash-pair", "vector"};
-const char *pz_types_i[] = {"x", "f", "i", "S", "s", ":", "C", "{", "P", "["};
+const char *pz_types_i[] = {"x", "f", "i", "c", "S", "s", ":", "C", "{", "P", "["};
 
 const char *pz_type_to_cp(short int t) {
   if (t > PZ_TYPE_MAX || t < 0) { return "<unknown>"; }
@@ -612,7 +612,7 @@ const char *pz_type_to_i_cp(short int t) {
 int pz_is_string(Id va) { 
     return PZ_TYPE(va) == PZ_TYPE_SYMBOL || PZ_TYPE(va) == PZ_TYPE_STRING; }
 int pz_is_number(Id va) { 
-    return PZ_TYPE(va) == PZ_TYPE_DOUBLE || PZ_TYPE(va) == PZ_TYPE_LONG; }
+    return PZ_TYPE(va) == PZ_TYPE_FLOAT || PZ_TYPE(va) == PZ_TYPE_LONG; }
 int c_type(int t) { return t == PZ_TYPE_SYMBOL ? PZ_TYPE_STRING : t;}
 int pz_is_type_i(Id va, int t) { return c_type(PZ_TYPE(va)) == c_type(t); }
 #define S(s) pz_string_new_c(b, s)
@@ -848,7 +848,7 @@ Id __pz_snn(void *b, Id n, const char *f) {
   int i = PZ_TYPE(n) == PZ_TYPE_LONG;
   char ns[1024]; 
   i ? snprintf(ns, 1023, f, PZ_LONG(n)) : 
-      snprintf(ns, 1023, "%f", PZ_DOUBLE(n));
+      snprintf(ns, 1023, "%f", PZ_FLOAT(n));
   return S(ns);
 }
 
@@ -1804,7 +1804,7 @@ int __pz_dump_to_d(void *b, Id va, pz_str_d *d) {
         if (d->dump_debug) pz_append_format(d, "SPECIAL:#x%lx:", va);
         pz_strncat(d, pz_special_dump(va));
         return 1; break; }
-    case PZ_TYPE_DOUBLE: pz_append_format(d, "%f", PZ_DOUBLE(va)); return 1; break;
+    case PZ_TYPE_FLOAT: pz_append_format(d, "%f", PZ_FLOAT(va)); return 1; break;
     case PZ_TYPE_LONG: pz_append_format(d, "%ld", PZ_LONG(va)); return 1; break;
     case PZ_TYPE_BOOL: {
       if (d->dump_debug) pz_append_format(d, "BOOL:%lx:", va); 

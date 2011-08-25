@@ -102,8 +102,8 @@ Id pz_numberize(void *b, Id token) {
   int base = pz_process_number((char *)&n, dt.s);
   long l = strtol((char *)&n, &ep, base);
   if (ep && *ep == '\0') return pz_long((int)l);
-  float f = strtof(dt.s, &ep);
-  if (ep && *ep == '\0') return pz_double(f);
+  double d = strtod(dt.s, &ep);
+  if (ep && *ep == '\0') return pz_float(d);
   return pzNil;
 }
 
@@ -127,6 +127,7 @@ next_token:
       RETURN(pz_handle_parse_error_with_err_string_nh(
           "unexpected EOF while reading", pi->ps->line_number));
   do {
+   if (pz_ary_len(b, tokens) == 0) RETURN(pzNil);
    pz_release(token);
    token = pz_retain0(pz_ary_unshift(b, tokens));
    ignore_token = pz_string_equals_cp_i(token, "");
@@ -392,7 +393,7 @@ Id  __try_convert_to_floats(void *b, Id x) {
   int i = 0; 
   while (pz_ary_iterate(b, x, &i, &n)) {
     if (!pz_is_number(n)) return pzNil;
-    pz_ary_push(b, a, PZ_TYPE(n) == PZ_TYPE_LONG ? pz_double(PZ_LONG(n)) : n);
+    pz_ary_push(b, a, PZ_TYPE(n) == PZ_TYPE_LONG ? pz_float(PZ_LONG(n)) : n);
   }
   return a;
 }
@@ -410,7 +411,7 @@ Id  __try_convert_to_ints(void *b, Id x) {
 
 #define ON_I \
   int t = (pz_ary_contains_only_type_i(b, x, PZ_TYPE_LONG) ? 1 : \
-      (pz_ary_contains_only_type_i(b, x, PZ_TYPE_DOUBLE) ? 2 : 0)); \
+      (pz_ary_contains_only_type_i(b, x, PZ_TYPE_FLOAT) ? 2 : 0)); \
   if (t == 0) { \
       Id _try = __try_convert_to_ints(b, x);  \
       if (_try) { t = 1; x = _try; }} \
@@ -418,7 +419,7 @@ Id  __try_convert_to_ints(void *b, Id x) {
       Id _try = __try_convert_to_floats(b, x);  \
       if (_try) { t = 2; x = _try; }} \
   int ai = PZ_LONG(ca_f(x)); int bi = PZ_LONG(ca_s(x)); \
-  float af = PZ_DOUBLE(ca_f(x)); float bf = PZ_DOUBLE(ca_s(x)); \
+  float af = PZ_FLOAT(ca_f(x)); float bf = PZ_FLOAT(ca_s(x)); \
   Id r = pzNil; \
   ai = ai; bi = bi; bf = bf; af = af;\
   if (t == 1) { 
@@ -426,10 +427,10 @@ Id  __try_convert_to_ints(void *b, Id x) {
 #define R  ; } return r;
 
 
-Id pz_add(VB) { ON_I r = pz_long(ai + bi) ON_F r = pz_double(af + bf) R }
-Id pz_sub(VB) { ON_I r = pz_long(ai - bi) ON_F r = pz_double(af - bf) R }
-Id pz_mul(VB) { ON_I r = pz_long(ai * bi) ON_F r = pz_double(af * bf) R }
-Id pz_div(VB) { ON_I r = pz_long(ai / bi) ON_F r = pz_double(af / bf) R }
+Id pz_add(VB) { ON_I r = pz_long(ai + bi) ON_F r = pz_float(af + bf) R }
+Id pz_sub(VB) { ON_I r = pz_long(ai - bi) ON_F r = pz_float(af - bf) R }
+Id pz_mul(VB) { ON_I r = pz_long(ai * bi) ON_F r = pz_float(af * bf) R }
+Id pz_div(VB) { ON_I r = pz_long(ai / bi) ON_F r = pz_float(af / bf) R }
 Id pz_gt(VB) { ON_I r = cb(ai > bi) ON_F r = cb(af > bf) R }
 Id pz_lt(VB) { ON_I r = cb(ai < bi) ON_F r = cb(af < bf) R }
 Id pz_ge(VB) { ON_I r = cb(ai >= bi) ON_F r = cb(af >= bf) R }
