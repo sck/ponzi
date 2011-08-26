@@ -9,6 +9,10 @@
     (define t-eq (lambda-no-parameter-eval (a0 b0) (define a (eval a0)) (define b (eval b0)) (if (equal? a b) #t (displayln "Error: `" a0 "' expected to be: => " b0 ", but was: " a))))
     (displayln "  - " message)
     (eval (append '(begin) (list-tail xs 1)))))
+  (define no-crash-when (lambda-no-parameter-eval xs
+    (define message (eval (first xs)))
+    (displayln "  - " message)
+    (eval (append '(begin) (list-tail xs 1)))))
   (displayln what)
   (eval (append '(begin) (list-tail xs 1)))
   (displayln)))
@@ -39,8 +43,10 @@
     (t (< (- (+ 2.0 3.0) 5.0) 0.001)))
 )
 
-
 (describe "r5rs implementation"
+  (supports "define"
+    (define a 1)
+    (define a 2))
   (supports "#b #x #o formatted number literals"
     (t-eq #xa 10)
     (t-eq #b11 3)
@@ -55,7 +61,10 @@
   (supports "string type conversion"
     (t-eq (string->number "100") 100)
     (t-eq (string->number "150.0") 150.0)
-    (t (symbol? (string->symbol "test"))))
+    (t (symbol? (string->symbol "test")))
+    (t (string? (symbol->string 'test))))
+  (supports "number->string"
+    (t-eq (number->string 16 16) "#x10"))
   (supports "type querying"
     (t (boolean? #f))
     (f (boolean? 0))
@@ -67,7 +76,9 @@
     (f (procedure? '(lambda (x) (* x x))))
     (t (list? (list 1 2 3)))
     (t (list? '()))
-    (f (list? 0)))
+    (f (list? 0))
+    (f (string? 0))
+    (t (string? "foo")))
   (supports "equality"
     (t (equal? (list 1 2 3 4 5) (list 1 2 3 4 5)))
     (t-eq 'foo 'foo)
@@ -98,6 +109,14 @@
   (displayln "  - load"))
 (load "does-not-exist.scm")
 (load "./tests/r5rs-load.scm")
+
+(describe "doesn't crash when"
+  (no-crash-when "redefining a lambda"
+    (define a (lambda () (* 1 2)))
+    (define a (list-ref a 1)))
+)
+
+(begin (define a (lambda () (* 1 2))) (define a (list-ref a 1)))
 
 ;;(equal? (make-vector 3 0) '#(0 0 0))
 ;;(equal? (make-vector 3 1) '#(1 1 1))

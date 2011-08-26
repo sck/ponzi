@@ -251,8 +251,8 @@ typedef struct {
   Id symbol_interns;
   Id string_interns;
   Id globals;
-  Id string_refs;
-  Id string_refs_dict;
+  Id string_constants;
+  Id string_constants_dict;
   Id perf_dict;
 } pz_mem_descriptor_t;
 
@@ -278,18 +278,25 @@ pz_mem_descriptor_t *__pz_md(void *b) { return (pz_mem_descriptor_t *)b; }
 #define PTR_TO_VA(va, p) \
   PZ_ADR_SET(va, (int)(((p) - RCS - (char *)b) / PZ_STATIC_ALLOC_SIZE));
 
-#define P_0_R(p, r) if (!(p)) { printf("From %s:%d\n", __func__, __LINE__); return (r); }
-#define P_0_R2(w, l, p, r) if (!(p)) { printf("From %s:%d\n", w, l); return (r); }
-#define VA_0_R(va, r) if (!(va)) { return (r); }
-#define VA_TO_PTR(va) (__ca(b, va, __func__, __LINE__) ? VA_TO_PTR0(va) : 0 )
-#define VA_TO_PTR2(va) (__ca(b, va, w, l) ? VA_TO_PTR0(va) : 0 )
+#define SPEED 1
 
+#ifdef SPEED
+#define __ca(b, va, w, l) 1
+#else
 int __ca(void *b, Id va, WL) {
   char *p0 = VA_TO_PTR0(va); P_0_R(p0, 1); 
   rc_t *rc = (rc_t *)(p0 - RCS + sizeof(int));
   if ((*rc) == 0) { printf("[%s:%d] error: VA #x%x is not allocated!\n", w, l, PZ_ADR(va)); abort(); }
   return 1;
 }
+#endif
+
+#define P_0_R(p, r) if (!(p)) { printf("From %s:%d\n", __func__, __LINE__); return (r); }
+#define P_0_R2(w, l, p, r) if (!(p)) { printf("From %s:%d\n", w, l); return (r); }
+#define VA_0_R(va, r) if (!(va)) { return (r); }
+#define VA_TO_PTR(va) (__ca(b, va, __func__, __LINE__) ? VA_TO_PTR0(va) : 0 )
+#define VA_TO_PTR2(va) (__ca(b, va, w, l) ? VA_TO_PTR0(va) : 0 )
+
 
 Id cb(int i) { return i ? pzTrue : pzNil; }
 
@@ -357,8 +364,8 @@ int __pz_init_memory(void *b, size_t size) {
     PZ_HEADER_DS(symbol_interns, PZ_TYPE_HASH);
     PZ_HEADER_DS(string_interns, PZ_TYPE_HASH);
     PZ_HEADER_DS(globals, PZ_TYPE_HASH);
-    PZ_HEADER_DS(string_refs, PZ_TYPE_ARRAY);
-    PZ_HEADER_DS(string_refs_dict, PZ_TYPE_HASH);
+    PZ_HEADER_DS(string_constants, PZ_TYPE_ARRAY);
+    PZ_HEADER_DS(string_constants_dict, PZ_TYPE_HASH);
     PZ_HEADER_DS(perf_dict, PZ_TYPE_HASH);
     //PZ_HEADER_DS(gc, PZ_TYPE_HASH); // empty hash, just used for logging.
 
@@ -464,8 +471,8 @@ int __pz_unlock_va(WLB, Id va) { LI; return __pz_unlock_p(w, l, p); }
 #define pz_symbol_interns pz_md->symbol_interns
 #define pz_string_interns pz_md->string_interns
 #define pz_globals pz_md->globals
-#define pz_string_refs pz_md->string_refs
-#define pz_string_refs_dict pz_md->string_refs_dict
+#define pz_string_constants pz_md->string_constants
+#define pz_string_constants_dict pz_md->string_constants_dict
 #define pz_perf_dict pz_md->perf_dict
 
 
@@ -537,9 +544,10 @@ Id pz_valloc(void *b, const char *where, short int type) {
   return r;
 }
 
-int pz_zero(void *b, Id va) { 
+int pz_zero(void *b, Id va, int size) { 
   char *p = VA_TO_PTR0(va); P_0_R(p, 0); 
-  memset(p, 0, PZ_CELL_SIZE); return 1;}
+  memset(p, 0, size == 0 ? 20 : size); 
+  return 1;}
 
 #define PZ_ALLOC(va, type) va = pz_valloc(b, __func__, type); VA_0_R(va, pzNil);
 #define PZ_ALLOC2(va, type, r) va = pz_valloc(b, __func__, type); VA_0_R(va, r);
@@ -613,8 +621,8 @@ int pz_is_string(Id va) {
     return PZ_TYPE(va) == PZ_TYPE_SYMBOL || PZ_TYPE(va) == PZ_TYPE_STRING; }
 int pz_is_number(Id va) { 
     return PZ_TYPE(va) == PZ_TYPE_FLOAT || PZ_TYPE(va) == PZ_TYPE_LONG; }
-int c_type(int t) { return t == PZ_TYPE_SYMBOL ? PZ_TYPE_STRING : t;}
-int pz_is_type_i(Id va, int t) { return c_type(PZ_TYPE(va)) == c_type(t); }
+inline int c_type(int t) { return t == PZ_TYPE_SYMBOL ? PZ_TYPE_STRING : t;}
+inline int pz_is_type_i(Id va, int t) { return c_type(PZ_TYPE(va)) == c_type(t); }
 #define S(s) pz_string_new_c(b, s)
 #define IS(s) pz_intern_cp(b, s)
 #define ISS(s) pz_intern_cp(b, s, 1)
@@ -870,7 +878,7 @@ int sr = 0;
 #define pz_acquire_string_data(b, s, d) \
   __pz_acquire_string_data(__func__, __LINE__, b, s, d)
 
-int __pz_acquire_string_data(WLB, Id va_s, pz_str_d *d) { 
+inline int __pz_acquire_string_data(WLB, Id va_s, pz_str_d *d) { 
   char *s; PZ_TYPED_VA_TO_PTR2(char, s, va_s, PZ_TYPE_STRING, 0);
   d->s = s + sizeof(pz_string_size_t); d->l = *(pz_string_size_t *) s; 
   return 1;
@@ -1021,6 +1029,14 @@ Id pz_to_symbol(Id va_s) {
   return s;
 }
 
+Id pz_to_string(Id va_s) {
+  if (PZ_TYPE(va_s) == PZ_TYPE_STRING) return va_s;
+  if (PZ_TYPE(va_s) != PZ_TYPE_SYMBOL) return pzNil;
+  Id s = va_s;
+  PZ_TYPE_SET(s, PZ_TYPE_STRING);
+  return s;
+}
+
 /*
  * Hashtable
  */
@@ -1030,7 +1046,7 @@ typedef struct {
   Id va_value;
   Id va_next;
 } pz_ht_entry_t;
-#define PZ_HT_BUCKETS int((PZ_CELL_SIZE - (2 * sizeof(Id))) / sizeof(Id))
+#define PZ_HT_BUCKETS int((1000 - (2 * sizeof(Id))) / sizeof(Id))
 typedef struct {
   int size;
   Id va_buckets[PZ_HT_BUCKETS];
@@ -1042,9 +1058,9 @@ Id __pz_ht_new(WLB) {
     Id va_ht; 
     PZ_ALLOC(va_ht, PZ_TYPE_HASH); 
     pz_register_var(va_ht, w, l);
-    pz_lock_va(va_ht);
-    pz_zero(b, va_ht); 
-    pz_unlock_va(va_ht);
+    //pz_lock_va(va_ht);
+    pz_zero(b, va_ht, sizeof(pz_hash_t)); 
+    //pz_unlock_va(va_ht);
     return va_ht; }
 
 size_t pz_ht_hash(void *b, Id va_s) {
@@ -1350,7 +1366,7 @@ typedef struct {
 Id __pz_ary_new(WLB) {
   Id va_ary; PZ_ALLOC(va_ary, PZ_TYPE_ARRAY); 
   pz_register_var(va_ary, w, l);
-  pz_zero(b, va_ary); return va_ary; 
+  pz_zero(b, va_ary, 0); return va_ary; 
 }
 
 void __ary_retain_all(void *b, Id from, pz_array_t *a) {
@@ -1363,7 +1379,7 @@ void __ary_retain_all(void *b, Id from, pz_array_t *a) {
 Id __pz_ary_clone(void *b, Id va_s, int start, int count) {
   pz_array_t *ary_s; 
   PZ_TYPED_VA_TO_PTR(pz_array_t, ary_s, va_s, PZ_TYPE_ARRAY, pzNil);
-  Id va_c; PZ_ALLOC(va_c, PZ_TYPE_ARRAY); pz_zero(b, va_c); 
+  Id va_c; PZ_ALLOC(va_c, PZ_TYPE_ARRAY); pz_zero(b, va_c, 0); 
   char *p_c = VA_TO_PTR(va_c), *p_s = VA_TO_PTR(va_s);
   memcpy(p_c, p_s, PZ_CELL_SIZE);
   pz_array_t *a = (pz_array_t *)p_c;
@@ -1388,7 +1404,7 @@ int pz_ary_free(void *b, Id va_ary) {
 Id pz_ary_new_join(void *b, Id a, Id o) {
   pz_array_t *aa; PZ_TYPED_VA_TO_PTR(pz_array_t, aa, a, PZ_TYPE_ARRAY, pzNil);
   pz_array_t *ab; PZ_TYPED_VA_TO_PTR(pz_array_t, ab, o, PZ_TYPE_ARRAY, pzNil);
-  Id n; PZ_ALLOC(n, PZ_TYPE_ARRAY); pz_zero(b, n); 
+  Id n; PZ_ALLOC(n, PZ_TYPE_ARRAY); pz_zero(b, n, 0); 
   pz_array_t *an; PZ_TYPED_VA_TO_PTR(pz_array_t, an, n, PZ_TYPE_ARRAY, pzNil);
   int aas = aa->size - aa->start;
   an->size = aas + ab->size - ab->start;
@@ -1618,7 +1634,7 @@ typedef struct {
 Id __pz_rx_new(WLB, Id match_s) {
   Id va_rx; PZ_ALLOC(va_rx, PZ_TYPE_REGEXP); 
   pz_rx_t *rx; PZ_TYPED_VA_TO_PTR(pz_rx_t, rx, va_rx, PZ_TYPE_REGEXP, pzNil);
-  pz_zero(b, va_rx);
+  pz_zero(b, va_rx, 0);
   rx->match_s = pz_retain2(va_rx, match_s);
   pz_register_var(va_rx, w, l);
   return va_rx; 
@@ -1896,7 +1912,7 @@ Id pz_rx_deep_copy(void *b, void *source_b, Id va_s) {
       PZ_TYPED_VA_TO_PTR(pz_rx_t, rx_s, va_s, PZ_TYPE_REGEXP, pzNil);}
   Id va_rx; PZ_ALLOC(va_rx, PZ_TYPE_REGEXP); 
   pz_rx_t *rx; PZ_TYPED_VA_TO_PTR(pz_rx_t, rx, va_rx, PZ_TYPE_REGEXP, pzNil);
-  pz_zero(b, va_rx);
+  pz_zero(b, va_rx, 0);
   rx->match_s = pz_retain(va_rx, pz_deep_copy(b, source_b, rx_s->match_s));
   return va_rx; 
 }
@@ -1926,13 +1942,13 @@ Id pz_deep_copy(void *b, void *source_b, Id va_s) {
   return pzNil;
 }
 
-int pz_register_string_ref(void *b, Id _s) {
+int pz_register_string_constant(void *b, Id _s) {
   Id s = pz_intern(_s);
   Id v;
-  if ((v = pz_ht_get(b, pz_string_refs_dict, s))) return PZ_LONG(v);
-  pz_ary_push(b, pz_string_refs, s);
-  int i = pz_ary_len(b, pz_string_refs) - 1;
-  pz_ht_set(b, pz_string_refs_dict, s, pz_long(i));
+  if ((v = pz_ht_get(b, pz_string_constants_dict, s))) return PZ_LONG(v);
+  pz_ary_push(b, pz_string_constants, s);
+  int i = pz_ary_len(b, pz_string_constants) - 1;
+  pz_ht_set(b, pz_string_constants_dict, s, pz_long(i));
   return i;
 }
 

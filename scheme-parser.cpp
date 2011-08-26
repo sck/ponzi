@@ -1,5 +1,3 @@
-Id string_ref;
-
 Id pz_to_string(void *b, Id exp);
 
 #define VB void *b, Id x, pz_interp_t *pi
@@ -16,7 +14,6 @@ Id __pz_handle_parse_error_with_err_string(const char *w, void *b,
   return pz_handle_error_with_err_string(w, es, h); 
 }
 
-
 Id pz_string_parse(void *b, Id s) {
   if (!s) return pzNil;
   Id ary = pz_retain0(pz_string_split(b, s, '"'));
@@ -29,8 +26,8 @@ Id pz_string_parse(void *b, Id s) {
     if (!string_mode) {
       pz_ary_push(b, r, v);
     } else {
-      int i = pz_register_string_ref(b, v);
-      Id sr = S("(string-ref ");
+      int i = pz_register_string_constant(b, v);
+      Id sr = S("(string-constant ");
       pz_string_append(b, sr, pz_string_new_number(b, pz_long(i)));
       pz_string_append(b, sr, IS(")"));
       pz_ary_push(b, r, sr);
@@ -240,11 +237,11 @@ tail_rc_start:
   if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
     if (pz_string_equals_cp_i(x, "globals")) RETURN(pz_globals);
     if (pz_string_equals_cp_i(x, "vars")) RETURN(pz_retain(pi->_this, env));
-    if (pz_string_equals_cp_i(x, "perf-dict")) RETURN(pz_perf_dict);
+    //if (pz_string_equals_cp_i(x, "perf-dict")) RETURN(pz_perf_dict);
     if (pz_string_equals_cp_i(x, "string-interns")) RETURN(pz_string_interns);
     if (pz_string_equals_cp_i(x, "symbol-interns")) RETURN(pz_symbol_interns);
-    if (pz_string_equals_cp_i(x, "string-refs")) RETURN(pz_string_refs);
-    if (pz_string_equals_cp_i(x, "string-refs-dict")) RETURN(pz_string_refs_dict);
+    if (pz_string_equals_cp_i(x, "string-constants")) RETURN(pz_string_constants);
+    if (pz_string_equals_cp_i(x, "string-constants-dict")) RETURN(pz_string_constants_dict);
     if (pz_string_equals_cp_i(x, "#t")) RETURN(pzTrue);
     if (pz_string_equals_cp_i(x, "#f")) RETURN(pzNil);
     RETURN(pz_env_find(b, env, x));
@@ -270,7 +267,6 @@ tail_rc_start:
     RG(sg);
     RETURN(pz_handle_parse_error_with_err_string("Not a symbol type", 
         pz_string_ptr(sg = pz_to_string(b, pi->_this))));
-        
   }
   if (pz_string_equals_cp_i(x0, "quote")) {
     RETURN(ca_s(x));
@@ -447,6 +443,7 @@ Id pz_list(VB)  { return pz_ary_clone(b, x); }
 Id pz_list_p(VB) { return cb(pz_is_type_i(ca_f(x), PZ_TYPE_ARRAY)); }
 Id pz_null_p(VB) { return cb(cnil(ca_f(x))); }
 Id pz_symbol_p(VB) { return cb(pz_is_type_i(ca_f(x), PZ_TYPE_SYMBOL)); }
+Id pz_string_p(VB) { return cb(pz_is_type_i(ca_f(x), PZ_TYPE_STRING)); }
 Id pz_display(VB) { 
   RG(sg);
   printf("%s", pz_string_ptr(sg = pz_ary_join_by_s(b, 
@@ -469,8 +466,8 @@ Id pz_vector_push(VB)  { return pz_ary_push(b, ca_f(x), ca_s(x)); }
 Id pz_vector_pop(VB)  { return pz_ary_pop(b, ca_f(x)); }
 Id pz_vector_unshift(VB)  { return pz_ary_unshift(b, ca_f(x)); }
 Id pz_vector_length(VB)  { return pz_long(pz_ary_len(b, ca_f(x))); }
-Id pz_string_ref(VB)  { 
-    return pz_ary_index(b, pz_string_refs, PZ_LONG(ca_f(x))); }
+Id pz_string_constant(VB)  { 
+    return pz_ary_index(b, pz_string_constants, PZ_LONG(ca_f(x))); }
 Id _pz_string_split(VB)  { 
     return pz_string_split2(b, ca_f(x), ca_s(x)); }
 
@@ -567,6 +564,10 @@ Id pz_type_of(VB)  {
   return ISS(rs);
 }
 Id pz_string_to_number(VB)  { return pz_numberize(b, ca_f(x)); }
+Id pz_number_to_string(VB)  { 
+    char buf[1024];
+    snprintf(buf, 1023, "#x%lx", PZ_LONG(ca_f(x)));
+    return S(buf); }
 Id pz_boolean_p(VB)  { return cb(PZ_TYPE(ca_f(x)) == PZ_TYPE_BOOL); }
 
 Id pz_load(void *b, Id _fn, pz_interp_t *pi = 0);
@@ -582,6 +583,7 @@ Id pz_procedure_p(VB)  { Id l = ca_f(x); return cb(
     (PZ_TYPE(l) == PZ_TYPE_CFUNC) || 
     ((PZ_TYPE(l) == PZ_TYPE_ARRAY) && pz_ary_is_lambda(b,l))); }
 Id pz_string_to_symbol(VB)  { return pz_to_symbol(ca_f(x)); }
+Id pz_symbol_to_string(VB)  { return pz_to_string(ca_f(x)); }
 Id pz_make_string(VB) { return S(""); }
 Id pz_string_length(VB) { return pz_long(pz_string_len(b, ca_f(x))); }
 Id __pz_string_append(VB) { 
@@ -611,35 +613,40 @@ Id pz_makestack(VB) {
     pz_ary_push(b, a, r);
     pinterp = pinterp->previous_ip;
   }
-  D("stack", a);
   return a;
 }
 
+Id pz_hash_code(VB) { return pz_long(pz_hash_var(b, ca_f(x))); }
+
 const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
-    "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?", 
-    "null?", "symbol?", "display", "newline", "resetline", "current-ms",
-    "make-hash", "hash-set!", "hash-get", "hash-delete!", "make-vector",
-    "vector-get", "vector-set!", "vector-push!", "vector-pop!",
-    "vector-unshift!", "vector-length", "vector-tail", "string-ref", "string-split",
-    "vector-each", "vector-find", "hash-each", "rx-match-string", "rand",
-    "<<", ">>", "not", "sleep", "|", "&", "^", "type-of",
-    "string->number", "boolean?", "load", "eval", "procedure?",
-    "string->symbol", "string-append", "string-copy", "make-string",
-    "string-length", "inspect", "dump", "vector-append", "makestack", 0};
+    "equal?", "eq?", "length", "cons", "car", "cdr", "list", "list?",
+    "null?", "symbol?", "string?", "display", "newline", "resetline",
+    "current-ms", "make-hash", "hash-set!", "hash-get", "hash-delete!",
+    "make-vector", "vector-get", "vector-set!", "vector-push!",
+    "vector-pop!", "vector-unshift!", "vector-length", "vector-tail",
+    "string-constant", "string-split", "vector-each", "vector-find",
+    "hash-each", "rx-match-string", "rand", "<<", ">>", "not", "sleep",
+    "|", "&", "^", "type-of", "string->number", "number->string", 
+    "boolean?", "load", "eval", "procedure?", "string->symbol",
+    "symbol->string", "string-append", "string-copy", "make-string",
+    "string-length", "inspect", "dump", "vector-append", "makestack",
+    "hash-code", 0};
 
 Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div, 
     pz_gt, pz_lt, pz_ge, pz_le, pz_eq_p, pz_equal_p, pz_eq_p, pz_length, pz_cons,
     pz_car, pz_cdr, pz_list, pz_list_p, pz_null_p, pz_symbol_p,
-    pz_display, pz_newline, pz_resetline, pz_current_ms, pz_make_hash,
-    pz_hash_set, pz_hash_get, pz_hash_delete, pz_make_vector, pz_vector_get,
-    pz_vector_set, pz_vector_push, pz_vector_pop, pz_vector_unshift,
-    pz_vector_length, pz_vector_tail, pz_string_ref, _pz_string_split,
-    pz_vector_each, pz_vector_find, pz_hash_each, _pz_rx_match_string,
-    pz_rand, pz_shl, pz_shr, pz_not, pz_sleep, pz_b_or,
-    pz_b_and, pz_b_xor, pz_type_of, pz_string_to_number, pz_boolean_p,
-    __pz_load, __pz_eval, pz_procedure_p, pz_string_to_symbol,
-    __pz_string_append, pz_string_copy, pz_make_string, pz_string_length, 
-    pz_inspect, pz_dump, pz_vector_append, pz_makestack, 0};
+    pz_string_p, pz_display, pz_newline, pz_resetline, pz_current_ms,
+    pz_make_hash, pz_hash_set, pz_hash_get, pz_hash_delete,
+    pz_make_vector, pz_vector_get, pz_vector_set, pz_vector_push,
+    pz_vector_pop, pz_vector_unshift, pz_vector_length, pz_vector_tail,
+    pz_string_constant, _pz_string_split, pz_vector_each, pz_vector_find,
+    pz_hash_each, _pz_rx_match_string, pz_rand, pz_shl, pz_shr, pz_not,
+    pz_sleep, pz_b_or, pz_b_and, pz_b_xor, pz_type_of,
+    pz_string_to_number, pz_number_to_string, pz_boolean_p, __pz_load,
+    __pz_eval, pz_procedure_p, pz_string_to_symbol, pz_symbol_to_string,
+    __pz_string_append, pz_string_copy, pz_make_string, pz_string_length,
+    pz_inspect, pz_dump, pz_vector_append, pz_makestack, pz_hash_code,
+    0};
 
 
 void pz_add_std_functions(void *b, Id env) {

@@ -1,3 +1,5 @@
+(define internal-constants '(globals vars perf-dict string-interns symbol-interns string-constants string-constants-dict #t #f))
+(define internal-commands '(quote /# if set! define lambda lambda-no-parameter-eval begin))
 (define p inspect)
 (define find vector-find)
 (define or (lambda-no-parameter-eval xs 
@@ -85,7 +87,4 @@
   (display (- (current-ms) before)) 
   (displayln (quote ms))))
 
-
 (load "compiler.scm")
-
-
