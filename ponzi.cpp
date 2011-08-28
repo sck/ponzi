@@ -47,6 +47,8 @@ typedef size_t Id;
 #define PZ_DB_MAGIC 0xF0F0
 #define PZ_DB_VERSION 3
 
+#define uchar unsigned char
+
 #define PZ_ADR(va) int(va >> 32)
 #define PZ_ADR_SET(va, v) va = (va & 0x00000000FFFFFFFF) | ((size_t) v << 32)
 #define PZ_TYPE(va) (char)(va & 0x00000000000000FF)
@@ -55,7 +57,7 @@ typedef size_t Id;
 #define PZ_LONG_SET(va, v) va = (va & 0x00000000000000FF) | ((size_t) v << 8)
 #define PZ_FLOAT(va) __pz_float(va)
 #define PZ_FLOAT_SET(va, v) __pz_float_set(va, v)
-#define PZ_CHAR(va) size_t(va >> 56)
+#define PZ_CHAR(va) (uchar)(va >> 56)
 #define PZ_CHAR_SET(va, v) va = (va & 0x00FFFFFFFFFFFFFF) | ((size_t) v << 56)
 
 inline float __pz_float(Id va) {
@@ -68,7 +70,6 @@ inline void __pz_float_set(Id &va, float v) {
   size_t i = (size_t &)v;
   va = (va & 0x00000000FFFFFFFF) | ((size_t)i  << 32);
 }
-
 
 static Id pzNil = {0}; 
 static Id pzTrue = {0};
@@ -593,8 +594,11 @@ finish:
 Id pz_long(size_t i) { 
     Id va; PZ_TYPE_SET(va, PZ_TYPE_LONG); PZ_LONG_SET(va, i); return va; }
 
-Id pz_float(double f) { 
+Id pz_float(float f) { 
     Id va; PZ_TYPE_SET(va, PZ_TYPE_FLOAT); PZ_FLOAT_SET(va, f); return va; }
+
+Id pz_char(char c) { 
+    Id va; PZ_TYPE_SET(va, PZ_TYPE_CHAR); PZ_CHAR_SET(va, c); return va; }
 
 Id cn(Id v) { return PZ_TYPE(v) == PZ_TYPE_BOOL ? pz_long(v ? 1 : 0) : v; }
 
@@ -603,7 +607,7 @@ Id cn(Id v) { return PZ_TYPE(v) == PZ_TYPE_BOOL ? pz_long(v ? 1 : 0) : v; }
  */
 
 
-const char *pz_types_s[] = {"nil", "float", "long", "char", "special", "string",
+const char *pz_types_s[] = {"bool", "float", "long", "char", "special", "string",
     "symbol", "cfunc", "hash", "hash-pair", "vector"};
 const char *pz_types_i[] = {"x", "f", "i", "c", "S", "s", ":", "C", "{", "P", "["};
 
@@ -932,6 +936,12 @@ int pz_string_hash(void *b, Id va_s, size_t *hash) {
 int pz_string_len(void *b, Id va_s) {
   PZ_ACQUIRE_STR_D(ds, va_s, 0); return ds.l; }
 
+Id pz_string_char_at(void *b, Id va_s, long pos) {
+  PZ_ACQUIRE_STR_D(ds, va_s, 0); 
+  if (pos + 1 > ds.l) return pzNil;
+  return pz_char(*(ds.s + pos)); 
+}
+
 #define pz_string_equals_cp_i(s, sb)  \
     __pz_string_equals_cp_i(__func__, __LINE__, b, s, sb)
 int __pz_string_equals_cp_i(WLB, Id va_s, const char *sb) {
@@ -941,6 +951,41 @@ int __pz_string_equals_cp_i(WLB, Id va_s, const char *sb) {
   pz_string_size_t i;
   for (i = 0; i < ds.l; i++) { if (ds.s[i] != sb[i]) return 0; }
   return 1;
+}
+
+char pz_hex_to_char(const char *s) {
+  char hn[3];
+  hn[0] = s[0]; hn[1] = s[1]; hn[2] = 0x0;
+  char *ep;
+  long l = strtol((char *)&hn, &ep, 16);
+  //printf("hn: '%s' l = %ld c = %c\n", hn, l, char(l));
+  if (ep && *ep == '\0') return char(l);
+  return '?';
+}
+
+Id pz_string_unquote(void *b, Id va_s) {
+  PZ_ACQUIRE_STR_D(dt, va_s, 0); 
+  pz_retain0(va_s);
+  char r[16384];
+  int i, ri, l = dt.l; 
+  for (ri = i = 0; i < dt.l && ri < 16300; ++i, ++ri, --l) {
+    uchar c = dt.s[i];
+    if (c == '\\' && l > 1) {
+      uchar c2 = dt.s[++i]; --l;
+      if (c2 == 'n') r[ri] = '\n';
+      else if (c2 == 'r') r[ri] = '\r';
+      else if (c2 == '\\') r[ri] = '\\';
+      else if (c2 == 'x' && l > 3) { // \xFF
+        r[ri] = pz_hex_to_char(dt.s + i + 1);
+        i += 2;
+      }
+    } else r[ri] = dt.s[i];
+  }
+  r[ri] = 0x0;
+  //printf("r: '%s' ri: %d\n", r, ri);
+  pz_release(va_s);
+  //return D("unquote", __pz_string_new(__func__, __LINE__, b, (const char *)&r, ri));
+  return pz_string_new(b, (const char *)&r, ri);
 }
 
 void __cp(char **d, char **s, size_t l, int is) {
@@ -1228,7 +1273,7 @@ Id pz_intern_cp(void *b, const char *sp, int to_symbol = 0) {
   Id s0 = S(sp);
   Id s = pz_retain0( to_symbol ? pz_to_symbol(s0) : s0);
   Id r = pz_intern(s);
-  pz_release(s);
+  pz_release(s);  
   return r;
 }
 
@@ -1747,11 +1792,34 @@ int pz_ary_dump(void *b, Id a, pz_str_d *d) {
   return 1;
 }
 
+int pz_append_quoted_string(void *b, Id s, pz_str_d *d) {
+  PZ_ACQUIRE_STR_D(dt, s, 0);
+  char r[16384];
+  int i, ri; 
+  for (ri = i = 0; i < dt.l && ri < 16300; i++, ri++) {
+    uchar c = dt.s[i];
+    if (c < 0x20 || c > 0x80) {
+      if (c == '\n' || c == '\r') {
+        r[ri++] = '\\'; r[ri] = c == '\n' ? 'n' : 'r';
+      } else {
+        snprintf(r + ri, 5, "\\x%x", c);
+        ri += 2;
+      }
+    } else r[ri] = dt.s[i];
+  }
+  pz_append_format(d, "\"%s\"", (const char *)&r);
+  return 1;
+}
+
 int pz_string_dump(void *b, Id s, pz_str_d *d) {
-  const char *format = ((d->dump_inspect || d->dump_debug) ?
-     (PZ_TYPE(s) == PZ_TYPE_STRING ? "\"%s\"" : "'%s") :
-     (PZ_TYPE(s) == PZ_TYPE_STRING ? "%s" : "%s"));
-  pz_append_format(d, format, pz_string_ptr(s));
+  if (PZ_TYPE(s) == PZ_TYPE_SYMBOL) {
+    pz_append_format(d, "%s%s", 
+        (d->dump_inspect || d->dump_debug) ? "'" : "", pz_string_ptr(s));
+    return 1;
+  }
+  if (d->dump_inspect || d->dump_debug) 
+      return pz_append_quoted_string(b, s, d);
+  pz_append_format(d, "%s", pz_string_ptr(s));
   return 1;
 }
 
@@ -1797,6 +1865,26 @@ int pz_rx_dump(void *b, Id va_rx, pz_str_d *d) {
   return 1;
 }
 
+int pz_char_dump(void *b, Id va_c, pz_str_d *d) {
+  uchar c = PZ_CHAR(va_c);
+  if (d->dump_debug) pz_strncat(d, "CHAR:");
+  if (d->dump_debug || d->dump_inspect) {
+    pz_strncat(d, "#\\");
+    int detected = 1;
+    switch (c) {
+      case 0x20: pz_strncat(d, "space"); break;
+      case '\n': pz_strncat(d, "newline"); break;
+      case '\r': pz_strncat(d, "return"); break;
+      default: detected = 0; break;
+    }
+    if (!detected) {
+      if (c < 0x20 || c > 0x80) pz_append_format(d, "x%x", c)
+      else pz_append_format(d, "%c", c);
+    }
+  } else pz_append_format(d, "%c", c);
+  return 1;
+}
+
 const char* pz_special_dump(Id va) {
   if (va == pzTail) return "#tail-recursion"; 
   if (va == pzError) return "#E!";
@@ -1822,6 +1910,7 @@ int __pz_dump_to_d(void *b, Id va, pz_str_d *d) {
         return 1; break; }
     case PZ_TYPE_FLOAT: pz_append_format(d, "%f", PZ_FLOAT(va)); return 1; break;
     case PZ_TYPE_LONG: pz_append_format(d, "%ld", PZ_LONG(va)); return 1; break;
+    case PZ_TYPE_CHAR: return pz_char_dump(b, va, d); break;
     case PZ_TYPE_BOOL: {
       if (d->dump_debug) pz_append_format(d, "BOOL:%lx:", va); 
       pz_strncat(d, va ? "#t" : "#f");

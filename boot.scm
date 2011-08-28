@@ -1,5 +1,3 @@
-(define internal-constants '(globals vars perf-dict string-interns symbol-interns string-constants string-constants-dict #t #f))
-(define internal-commands '(quote /# if set! define lambda lambda-no-parameter-eval begin))
 (define p inspect)
 (define find vector-find)
 (define or (lambda-no-parameter-eval xs 
@@ -20,6 +18,21 @@
 (define any? (lambda (l v) 
     (define rany #f)
     (find l (lambda (x) (if (eq? x v) (set! rany #t) #f))) rany))
+
+;
+(define char? (lambda (w) (eq? (type-of w) 'char)))
+(define string? (lambda (w) (eq? (type-of w) 'string)))
+(define list? (lambda (w) (eq? (type-of w) 'vector)))
+(define symbol? (lambda (w) (eq? (type-of w) 'symbol)))
+(define boolean? (lambda (w) (eq? (type-of w) 'bool)))
+
+(define procedure? (lambda (w) 
+    (define t (type-of w)) (or (eq? t 'cfunc) (eq? t 'lambda))))
+(define null? (lambda (w) (eq? w '())))
+
+
+;(define newline (lambda () display #\newline))
+;(define resetline (lambda () display #\resetline))
 
 (define displayln (lambda xs (for-each xs display) (newline)))
 (define #hash (lambda xs 
