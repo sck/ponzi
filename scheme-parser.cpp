@@ -493,7 +493,7 @@ Id __pz_vector_find(void *b, Id x, pz_interp_t* pi, int check_brk = 1) {
   //Id _this = pzNil;
   Id e = pz_retain0(pz_env_new(b, pi->_env));
   Id lambda = ca_s(x);
-  Id vdecl, pn;
+  Id vdecl, pn = 0;
   int l;
   if (!pz_is_type_i(lambda, PZ_TYPE_CFUNC)) {
     vdecl = ca_f(lambda);
@@ -602,6 +602,8 @@ Id pz_string_length(VB) { return pz_long(pz_string_len(b, ca_f(x))); }
 Id pz_string_ref(VB) { return pz_string_char_at(b, ca_f(x), PZ_LONG(ca_s(x))); }
 Id __pz_string_append(VB) { 
     return pz_ary_join_by_s(b, pz_ary_map(b, x, pz_to_string), IS("")); }
+Id __pz_string_append_bang(VB) { 
+    return pz_string_append(b, ca_f(x), ca_s(x)); }
 Id pz_string_copy(VB) { 
     return pz_string_sub_str_new(b, ca_f(x), 0, -1); }
 Id pz_inspect(VB) { 
@@ -641,9 +643,9 @@ const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "vector-each", "vector-find", "hash-each", "rx-match-string", "rand",
     "<<", ">>", "not", "sleep", "|", "&", "^", "type-of",
     "string->number", "number->string", "load", "eval", "string->symbol",
-    "symbol->string", "string-append", "string-copy", "make-string",
-    "string-length", "string-ref", "inspect", "dump", "vector-append",
-    "makestack", "hash-code", 0};
+    "symbol->string", "string-append", "string-append!", "string-copy",
+    "make-string", "string-length", "string-ref", "inspect", "dump",
+    "vector-append", "makestack", "hash-code", 0};
 
 Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div, 
     pz_gt, pz_lt, pz_ge, pz_le, pz_eq_p, pz_equal_p, pz_eq_p, pz_length,
@@ -656,9 +658,9 @@ Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div,
     pz_shr, pz_not, pz_sleep, pz_b_or, pz_b_and, pz_b_xor, pz_type_of,
     pz_string_to_number, pz_number_to_string, __pz_load, __pz_eval,
     pz_string_to_symbol, pz_symbol_to_string, __pz_string_append,
-    pz_string_copy, pz_make_string, pz_string_length, pz_string_ref,
-    pz_inspect, pz_dump, pz_vector_append, pz_makestack, pz_hash_code,
-    0};
+    __pz_string_append_bang, pz_string_copy, pz_make_string,
+    pz_string_length, pz_string_ref, pz_inspect, pz_dump,
+    pz_vector_append, pz_makestack, pz_hash_code, 0};
 
 
 void pz_add_std_functions(void *b, Id env) {

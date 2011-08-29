@@ -266,7 +266,7 @@ typedef struct {
 
 #define PZ_VA_START 7
 size_t pz_header_size() { return PZ_STATIC_ALLOC_SIZE * PZ_VA_START; }
-Id pz_header_size_ssa() { Id a; PZ_ADR_SET(a, PZ_VA_START); return a; }
+Id pz_header_size_ssa() { Id a = 0; PZ_ADR_SET(a, PZ_VA_START); return a; }
 #define pz_md __pz_md(b)
 void *pz_heap = 0;
 void *pz_perf = 0;
@@ -279,7 +279,7 @@ pz_mem_descriptor_t *__pz_md(void *b) { return (pz_mem_descriptor_t *)b; }
 #define PTR_TO_VA(va, p) \
   PZ_ADR_SET(va, (int)(((p) - RCS - (char *)b) / PZ_STATIC_ALLOC_SIZE));
 
-#define SPEED 1
+#define SPEED 
 
 #ifdef SPEED
 #define __ca(b, va, w, l) 1
@@ -592,13 +592,13 @@ finish:
  */
 
 Id pz_long(size_t i) { 
-    Id va; PZ_TYPE_SET(va, PZ_TYPE_LONG); PZ_LONG_SET(va, i); return va; }
+    Id va = 0; PZ_TYPE_SET(va, PZ_TYPE_LONG); PZ_LONG_SET(va, i); return va; }
 
 Id pz_float(float f) { 
-    Id va; PZ_TYPE_SET(va, PZ_TYPE_FLOAT); PZ_FLOAT_SET(va, f); return va; }
+    Id va = 0; PZ_TYPE_SET(va, PZ_TYPE_FLOAT); PZ_FLOAT_SET(va, f); return va; }
 
 Id pz_char(char c) { 
-    Id va; PZ_TYPE_SET(va, PZ_TYPE_CHAR); PZ_CHAR_SET(va, c); return va; }
+    Id va = 0; PZ_TYPE_SET(va, PZ_TYPE_CHAR); PZ_CHAR_SET(va, c); return va; }
 
 Id cn(Id v) { return PZ_TYPE(v) == PZ_TYPE_BOOL ? pz_long(v ? 1 : 0) : v; }
 
@@ -789,7 +789,7 @@ size_t __pz_mem_dump(void *b, int silent) {
     if (*rc > 0) {
       active_entries++;
       short int *t = (short int *) (p + sizeof(int));
-      Id r;
+      Id r = 0;
       PTR_TO_VA(r, (char *)p - sizeof(int) + RCS);
       PZ_TYPE_SET(r, *t);
 #ifdef PZ_GC_DEBUG
@@ -1032,7 +1032,7 @@ Id pz_string_replace(void *b, Id va_s, Id va_a, Id va_b) {
 
 size_t pz_hash_var(void *b, Id va) {
   if (PZ_TYPE(va) == PZ_TYPE_STRING) {
-    size_t h;
+    size_t h = 0;
     pz_string_hash(b, va, &h);
     return h;
   }
@@ -1233,8 +1233,8 @@ Id __pz_ht_set(WLB, Id va_ht, Id va_key, Id va_value) {
   pz_hash_t *ht; PZ_TYPED_VA_TO_PTR(pz_hash_t, ht, va_ht, PZ_TYPE_HASH, pzNil);
   int exists = 0;
   pz_ht_entry_t *hr; pz_ht_lookup(b, &hr, va_ht, va_key, &exists);
-  size_t v;
-  Id va_hr;
+  size_t v = 0;
+  Id va_hr = 0;
   if (!exists) { 
     v = pz_ht_hash(b, va_key);
     PZ_ALLOC(va_hr, PZ_TYPE_HASH_PAIR);

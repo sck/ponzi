@@ -42,7 +42,7 @@
   (supports "floating-point numbers" 
     (t (< (- (+ 2.0 3.0) 5.0) 0.001)))
   (supports "in-string quotations"
-    (t-eq (string-append "test" #\newline #\resetline #\xff "88" ) "test\n\r\xf88"))
+    (t-eq (string-append "test" #\newline #\return #\xff "88" ) "test\n\r\xf88"))
 )
 
 (describe "r5rs implementation"
