@@ -28,11 +28,13 @@
 
 (define procedure? (lambda (w) 
     (define t (type-of w)) (or (eq? t 'cfunc) (eq? t 'lambda))))
+(define lambda? (lambda (w) (define t (type-of w)) (eq? t 'lambda)))
+(define cfunc? (lambda (w) (define t (type-of w)) (eq? t 'cfunc)))
 (define null? (lambda (w) (eq? w '())))
 
 
-;(define newline (lambda () display #\newline))
-;(define resetline (lambda () display #\resetline))
+(define newline (lambda () (display #\newline)))
+(define resetline (lambda () (display #\return)))
 
 (define displayln (lambda xs (for-each xs display) (newline)))
 (define #hash (lambda xs 

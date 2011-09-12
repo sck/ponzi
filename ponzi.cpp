@@ -312,11 +312,12 @@ int pz_vars_total(void *b) { return pz_md->total_size / PZ_STATIC_ALLOC_SIZE; }
 #define PZ_TYPE_STRING 5
 #define PZ_TYPE_SYMBOL 6
 #define PZ_TYPE_CFUNC 7
-#define PZ_TYPE_HASH 8
-#define PZ_TYPE_HASH_PAIR 9
-#define PZ_TYPE_ARRAY 10
-#define PZ_TYPE_REGEXP 11
-#define PZ_TYPE_MAX 11
+#define PZ_TYPE_PAIR 8
+#define PZ_TYPE_HASH 9
+#define PZ_TYPE_HASH_PAIR 10
+#define PZ_TYPE_ARRAY 11
+#define PZ_TYPE_REGEXP 12
+#define PZ_TYPE_MAX 12
 
 #define pz_ary_len(b, a) __pz_ary_len(__func__, __LINE__, b, a)
 int __pz_ary_len(WLB, Id va_ary);
@@ -476,22 +477,12 @@ int __pz_unlock_va(WLB, Id va) { LI; return __pz_unlock_p(w, l, p); }
 #define pz_string_constants_dict pz_md->string_constants_dict
 #define pz_perf_dict pz_md->perf_dict
 
-
 int __pz_lock_header(WLB) { return __pz_lock_va(w, l, b, pzHeader); }
 int __pz_unlock_header(WLB) { return __pz_unlock_va(w, l, b, pzHeader); }
 
-//#define pz_lock_gc() __pz_lock_gc(__func__, __LINE__, b)
-//int __pz_lock_gc(WLB) { return __pz_lock_va(w, l, b, pz_md->gc); }
-
-//#define pz_unlock_gc() __pz_unlock_gc(__func__, __LINE__, b)
-//int __pz_unlock_gc(WLB) { return __pz_unlock_va(w, l, b, pz_md->gc); }
-
-//size_t pz_alloc_counter = 0;
-//size_t pz_alloc_counter_last_time = 0;
 int pz_alloc_locked = 0;
 Id __pz_valloc(void *b, const char *where, short int type) {
   Id va_first;
-  //pz_alloc_counter++;
 retry_start:
   {}
   pz_mem_chunk_descriptor_t *c = pz_md_first_free; 
@@ -507,10 +498,7 @@ retry_start:
     Id ns = pz_atomic_cas_id(&pz_md->first_free, c->next, va_first); 
     if (ns != va_first) { printf("alloc first failed\n"); goto retry; }
     PTR_TO_VA(r, (char *)c);
-    //printf("alloc size: %x\n", PZ_ADR(r));
   } else {
-    //printf("alloc sub\n");
-    // chunk is larger than wanted 
     size_t ns, os;
     os = c->size;
     ns = pz_atomic_sub(&c->size, PZ_STATIC_ALLOC_SIZE);
@@ -518,14 +506,12 @@ retry_start:
     PTR_TO_VA(r, (char *)c + c->size);
   }
   if (!c->next) { pz_md->heap_size += PZ_STATIC_ALLOC_SIZE; }
-  //printf("heap size: %ld\n", pz_md->heap_size);
   if (r) { 
     PZ_TYPE_SET(r, type); 
     pz_lock_va(r);
     char *p = VA_TO_PTR0(r);
     rc_t *rc = (rc_t *) (p - RCS + sizeof(int));
     *rc = PZ_RC_JUST_ALLOCATED;
-    //pz_alloc_debug(b, (char *)rc, type);
     short int *t = (short int *)(p - sizeof(short int));
     *t = type;
     pz_unlock_va(r);
@@ -608,17 +594,11 @@ Id cn(Id v) { return PZ_TYPE(v) == PZ_TYPE_BOOL ? pz_long(v ? 1 : 0) : v; }
 
 
 const char *pz_types_s[] = {"bool", "float", "long", "char", "special", "string",
-    "symbol", "cfunc", "hash", "hash-pair", "vector"};
-const char *pz_types_i[] = {"x", "f", "i", "c", "S", "s", ":", "C", "{", "P", "["};
+    "symbol", "cfunc", "cons", "hash", "hash-pair", "vector"};
 
 const char *pz_type_to_cp(short int t) {
   if (t > PZ_TYPE_MAX || t < 0) { return "<unknown>"; }
   return pz_types_s[t];
-}
-
-const char *pz_type_to_i_cp(short int t) {
-  if (t > PZ_TYPE_MAX || t < 0) { return "?"; }
-  return pz_types_i[t];
 }
 
 int pz_is_string(Id va) { 
@@ -683,6 +663,7 @@ void pz_md_print_var_info(void *b, const char *m, rc_t *rc, Id r, int silent,
  */
 
 int pz_ary_free(void *b, Id);
+int pz_pair_free(void *b, Id);
 int pz_ht_free(void *b, Id);
 
 Id pz_delete(void *b, Id va);
@@ -761,6 +742,7 @@ Id pz_delete(void *b, Id va) {
   show_rc("pz_delete", b,va);
   PZ_CHECK_ERROR((*rc != 1), "Cannot delete, rc != 0!", pzNil);
   switch (PZ_TYPE(va)) {
+    case PZ_TYPE_PAIR: pz_pair_free(b, va); break;
     case PZ_TYPE_ARRAY: pz_ary_free(b, va); break;
     case PZ_TYPE_HASH: pz_ht_free(b, va); break;
     case PZ_TYPE_HASH_PAIR: return va; /* ignore: will always be freed by hash */; break;
@@ -958,7 +940,6 @@ char pz_hex_to_char(const char *s) {
   hn[0] = s[0]; hn[1] = s[1]; hn[2] = 0x0;
   char *ep;
   long l = strtol((char *)&hn, &ep, 16);
-  //printf("hn: '%s' l = %ld c = %c\n", hn, l, char(l));
   if (ep && *ep == '\0') return char(l);
   return '?';
 }
@@ -975,16 +956,14 @@ Id pz_string_unquote(void *b, Id va_s) {
       if (c2 == 'n') r[ri] = '\n';
       else if (c2 == 'r') r[ri] = '\r';
       else if (c2 == '\\') r[ri] = '\\';
-      else if (c2 == 'x' && l > 3) { // \xFF
+      else if (c2 == 'x' && l > 2) { // \xFF
         r[ri] = pz_hex_to_char(dt.s + i + 1);
         i += 2;
       }
     } else r[ri] = dt.s[i];
   }
   r[ri] = 0x0;
-  //printf("r: '%s' ri: %d\n", r, ri);
   pz_release(va_s);
-  //return D("unquote", __pz_string_new(__func__, __LINE__, b, (const char *)&r, ri));
   return pz_string_new(b, (const char *)&r, ri);
 }
 
@@ -1080,6 +1059,63 @@ Id pz_to_string(Id va_s) {
   Id s = va_s;
   PZ_TYPE_SET(s, PZ_TYPE_STRING);
   return s;
+}
+
+/*
+ * Pairs
+ */
+
+typedef struct pz_pair_t {
+   Id va_first; 
+   Id va_rest;
+};
+
+#define pz_pair_new(b, f, r) __pz_pair_new(__func__, __LINE__, b, f, r)
+Id __pz_pair_new(WLB, Id va_first, Id va_rest) {
+    Id va_pr; 
+    PZ_ALLOC(va_pr, PZ_TYPE_PAIR); 
+    pz_register_var(va_pr, w, l);
+    pz_pair_t *p; PZ_TYPED_VA_TO_PTR(pz_pair_t, p, va_pr, PZ_TYPE_PAIR, pzNil);
+    p->va_first = pz_retain2(va_pr, va_first);
+    p->va_rest = pz_retain2(va_pr, va_rest);
+    return va_pr; }
+
+// iterate
+
+typedef struct {
+  int initialized;
+  pz_pair_t *p;
+} pz_pair_iterate_t;
+
+int pz_pair_iterate(void *b, Id va_pr, pz_pair_iterate_t *pr, Id *v) {
+  pz_pair_t *p; PZ_TYPED_VA_TO_PTR(pz_pair_t, p, va_pr, PZ_TYPE_PAIR, 0);
+  if (!pr->initialized) { 
+      pr->p = p; 
+      pr->initialized = 1; 
+  } else {
+    if (!pr->p->va_rest) return 0;
+    Id va = pr->p->va_rest;
+    pz_pair_t *pn; PZ_TYPED_VA_TO_PTR(pz_pair_t, pn, va, PZ_TYPE_PAIR, 0);
+    pr->p = pn;
+  }
+  *v  = pr->p->va_first;
+  return 1;
+}
+
+size_t pz_pair_length(void *b, Id va_pr) {
+  pz_pair_iterate_t i;
+  i.initialized = 0;
+  Id v;
+  size_t s = 0;
+  while (pz_pair_iterate(b, va_pr, &i, &v)) s++;
+  return s;
+}
+
+int pz_pair_free(void *b, Id va_pr) {
+  pz_pair_t  *p; PZ_TYPED_VA_TO_PTR(pz_pair_t, p, va_pr, PZ_TYPE_PAIR, pzNil);
+  pz_release(p->va_rest);
+  pz_release(p->va_first);
+  return 1;
 }
 
 /*
@@ -1392,6 +1428,12 @@ Id pz_call(void *b, Id va_f, Id x, pz_interp_t *pi) {
   pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, pzNil);
   Id r = cf->func_ptr(b, x, pi);
   return r;
+}
+
+Id pz_cfunc_to_bin_adr_s(void *b, Id va_f) { 
+  pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, pzNil);
+  size_t adr = (size_t)cf->func_ptr;
+  return pz_string_new(b, (const char *)&adr, sizeof(size_t));
 }
 
 /*
@@ -1782,8 +1824,23 @@ int pz_ary_dump(void *b, Id a, pz_str_d *d) {
   if (d->dump_debug) pz_append_format(d, "%d:", l);
 
 
-  pz_strncat(d, "(");
+  pz_strncat(d, "#(");
   while (pz_ary_iterate(b, a, &i, &va)) {
+    if (!first) { pz_strncat(d, " "); }
+    pz_dump_va(b, va, d);
+    first = 0;
+  }
+  pz_strncat(d, ")");
+  return 1;
+}
+
+int pz_pair_dump(void *b, Id p, pz_str_d *d) {
+  pz_strncat(d, "( ");
+  pz_pair_iterate_t i;
+  i.initialized = 0;
+  Id va;
+  int first = 1;
+  while (pz_pair_iterate(b, p, &i, &va)) {
     if (!first) { pz_strncat(d, " "); }
     pz_dump_va(b, va, d);
     first = 0;
@@ -1802,7 +1859,7 @@ int pz_append_quoted_string(void *b, Id s, pz_str_d *d) {
       if (c == '\n' || c == '\r') {
         r[ri++] = '\\'; r[ri] = c == '\n' ? 'n' : 'r';
       } else {
-        snprintf(r + ri, 5, "\\x%x", c);
+        snprintf(r + ri, 5, "\\x%x02", c);
         ri += 2;
       }
     } else r[ri] = dt.s[i];
@@ -1878,7 +1935,7 @@ int pz_char_dump(void *b, Id va_c, pz_str_d *d) {
       default: detected = 0; break;
     }
     if (!detected) {
-      if (c < 0x20 || c > 0x80) pz_append_format(d, "x%x", c)
+      if (c < 0x20 || c > 0x80) pz_append_format(d, "x%x02", c)
       else pz_append_format(d, "%c", c);
     }
   } else pz_append_format(d, "%c", c);
@@ -1893,6 +1950,7 @@ const char* pz_special_dump(Id va) {
 
 int __pz_dump_to_d(void *b, Id va, pz_str_d *d) {
   switch (PZ_TYPE(va)) {
+    case PZ_TYPE_PAIR: return pz_pair_dump(b, va, d); break;
     case PZ_TYPE_ARRAY: return pz_ary_dump(b, va, d); break;
     case PZ_TYPE_HASH: return pz_ht_dump(b, va, d); break;
     case PZ_TYPE_HASH_PAIR: return pz_hash_pair_dump(b, va, d); break;
@@ -1943,92 +2001,6 @@ void pz_print_dump(void *b, Id va, int flags) {
   char dsc[16834];
   pz_dump_to_string(b, va, (char *)&dsc, flags);
   printf("%s ", dsc);
-}
-
-/*
- * deep copy
- */
-
-Id pz_deep_copy(void *b, void *source_b, Id va_s);
-
-Id pz_generic_deep_copy(void *b, void *source_b, Id va_s) {
-  char *s; int type;
-  { void *b = source_b; s = VA_TO_PTR0(va_s); P_0_R(s, pzNil); 
-      type = PZ_TYPE(va_s); }
-  Id va; PZ_ALLOC(va, type);
-  char *p = VA_TO_PTR0(va); P_0_R(p, pzNil); 
-  memcpy(p, s, PZ_CELL_SIZE);
-  return va;
-}
-
-Id pz_ary_deep_copy(void *b, void *source_b, Id va_s) {
-  pz_array_t *ary_s; 
-  { void *b = source_b; 
-  PZ_TYPED_VA_TO_PTR(pz_array_t, ary_s, va_s, PZ_TYPE_ARRAY, pzNil); }
-  Id va_c; PZ_ALLOC(va_c, PZ_TYPE_ARRAY);
-  pz_array_t *ary = (pz_array_t *)VA_TO_PTR(va_c); P_0_R(ary, pzNil);
-  int i = 0; 
-  for (i = ary_s->start; i < ary_s->size; i++) 
-      ary->va_entries[i] = pz_retain(va_c, 
-      pz_deep_copy(b, source_b, ary_s->va_entries[i]));
-  ary->start = ary_s->start;
-  ary->size = ary_s->size;
-  return va_c;
-}
-
-Id pz_ht_deep_copy(void *b, void *source_b, Id va_ht_s) {
-  int k; Id va_hr_s; pz_ht_entry_t *hr_s = &pz_ht_null_node; 
-  pz_hash_t *ht_s; 
-  { void *b = source_b; 
-      PZ_TYPED_VA_TO_PTR(pz_hash_t, ht_s, va_ht_s, PZ_TYPE_HASH, pzNil); }
-  Id h = pz_ht_new(b);
-  for (k = 0; k < PZ_HT_BUCKETS; k++) {
-    for (va_hr_s = ht_s->va_buckets[k]; va_hr_s != 0 && hr_s != NULL; 
-        va_hr_s = hr_s->va_next) {
-      { void *b = source_b; 
-       PZ_TYPED_VA_TO_PTR(pz_ht_entry_t, hr_s, va_hr_s, PZ_TYPE_HASH_PAIR, pzNil); }
-      Id k = pz_deep_copy(b, source_b, hr_s->va_value);
-      Id v = pz_deep_copy(b, source_b, hr_s->va_key); 
-      pz_ht_set(b, h, k, v);
-    }
-  }
-  return h;
-}
-
-Id pz_rx_deep_copy(void *b, void *source_b, Id va_s) {
-  pz_rx_t *rx_s;
-  {void *b = source_b;  
-      PZ_TYPED_VA_TO_PTR(pz_rx_t, rx_s, va_s, PZ_TYPE_REGEXP, pzNil);}
-  Id va_rx; PZ_ALLOC(va_rx, PZ_TYPE_REGEXP); 
-  pz_rx_t *rx; PZ_TYPED_VA_TO_PTR(pz_rx_t, rx, va_rx, PZ_TYPE_REGEXP, pzNil);
-  pz_zero(b, va_rx, 0);
-  rx->match_s = pz_retain(va_rx, pz_deep_copy(b, source_b, rx_s->match_s));
-  return va_rx; 
-}
-
-Id pz_string_deep_copy(void *b, void *source_b, Id va_s) {
-  char *s; int l, t, interned = 0;
-  {void *b = source_b;  PZ_ACQUIRE_STR_D(dt, va_s, pzNil);
-      l = dt.l; s = dt.s; t = PZ_TYPE(va_s); 
-      interned = pz_is_interned(b, va_s); }
-  Id va; PZ_ALLOC(va, PZ_TYPE_STRING);
-  if (l > 0 && !pz_strdup(b, va, s, l)) return pzNil;
-  PZ_TYPE_SET(va, t);
-  return interned ? pz_intern(va) : va;
-}
-
-Id pz_deep_copy(void *b, void *source_b, Id va_s) { 
-  if (!va_s || PZ_TYPE(va_s) < PZ_BASIC_TYPE_BOUNDARY) { return va_s; }; 
-  switch (PZ_TYPE(va_s)) {
-    case PZ_TYPE_ARRAY: return pz_ary_deep_copy(b, source_b, va_s); break;
-    case PZ_TYPE_HASH: return pz_ht_deep_copy(b, source_b, va_s); break;
-    case PZ_TYPE_HASH_PAIR: /* ignore: will always be copied by hash */; break;
-    case PZ_TYPE_REGEXP: return pz_rx_deep_copy(b, source_b, va_s); break; 
-    case PZ_TYPE_STRING: case PZ_TYPE_SYMBOL: 
-        return pz_string_deep_copy(b, source_b, va_s); break;
-    default: return pz_generic_deep_copy(b, source_b, va_s); break;
-  }
-  return pzNil;
 }
 
 int pz_register_string_constant(void *b, Id _s) {

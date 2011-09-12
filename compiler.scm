@@ -4,7 +4,7 @@
 
 (define asm-cfunc-call (lambda(cf)
   ; mov rcx,0x100000983
-  (emit "\x48\xb9" (cfunc->binary-addr cf)))
+  (emit (string-append "\x48\xb9" (cfunc->binary-addr-s cf))))
   ; call rcx
   (emit "\xff\xd1"))
 

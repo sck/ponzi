@@ -41,8 +41,11 @@
     (times 2 (lambda (n) 0)))
   (supports "floating-point numbers" 
     (t (< (- (+ 2.0 3.0) 5.0) 0.001)))
+  (supports "\\x00 in strings"
+    (t-eq "\x00" "\x00")
+    (f (eq? "\x00\x01" "\x00\x02")))
   (supports "in-string quotations"
-    (t-eq (string-append "test" #\newline #\return #\xff "88" ) "test\n\r\xf88"))
+    (t-eq (string-append "test" #\newline #\return #\xff "88" ) "test\n\r\xff88"))
 )
 
 (describe "r5rs implementation"
