@@ -1436,6 +1436,11 @@ Id pz_cfunc_to_bin_adr_s(void *b, Id va_f) {
   return pz_string_new(b, (const char *)&adr, sizeof(size_t));
 }
 
+Id pz_va_to_bin_adr_s(void *b, Id va) { 
+  size_t adr = PZ_ADR(va);
+  return pz_string_new(b, (const char *)&adr, sizeof(size_t));
+}
+
 /*
  * Array
  */
@@ -1782,20 +1787,23 @@ int pz_rx_match(void *b, Id va_rx, Id va_s) {
 
 int pz_dump_to_d(void *b, Id va, pz_str_d *d);
 
-#define pz_strncat(d, s) if (!__pz_strncat(d, s)) return 0;
+#define pz_strncat_0(d, s) if (!__pz_strncat_0(d, s)) return 0;
+#define pz_strncat(d, s, l) if (!__pz_strncat(d, s, l)) return 0;
 
-int __pz_strncat(pz_str_d *d, const char *s) {
-  size_t l = d->l + strlen(s);
+int __pz_strncat(pz_str_d *d, const char *s, size_t sl) {
+  size_t l = d->l + sl;
   PZ_CHECK_ERROR((l + 1 > 16384), "pz_strncat: string too large", 0);
-  memcpy(d->s + d->l, s, strlen(s));
-  d->l += strlen(s);
+  memcpy(d->s + d->l, s, sl);
+  d->l += sl;
   *(d->s + d->l) = 0x0;
   return 1;
 }
 
+int __pz_strncat_0(pz_str_d *d, const char *s) { return __pz_strncat(d, s, strlen(s)); }
+
 #define pz_append_format(d, format, values...) \
   { char bs[1024]; snprintf(bs, 1023, format, values); \
-  pz_strncat(d, bs); }
+  pz_strncat_0(d, bs); }
 
 int pz_dump_va(void *b, Id va, pz_str_d *d) {
   if (d->dump_recurse) {
@@ -1813,39 +1821,39 @@ int pz_ary_dump(void *b, Id a, pz_str_d *d) {
   int first = 1;
   int l = pz_ary_len(b, a);
   if (pz_ary_is_lambda(b, a)) {
-    pz_strncat(d, "(lambda ");
+    pz_strncat_0(d, "(lambda ");
     Id vdecl = ca_f(a);
     pz_dump_to_d(b, vdecl, d);
-    pz_strncat(d, " ");
+    pz_strncat_0(d, " ");
     pz_dump_to_d(b, ca_s(a), d);
-    pz_strncat(d, ")");
+    pz_strncat_0(d, ")");
     return 1;
   }
   if (d->dump_debug) pz_append_format(d, "%d:", l);
 
 
-  pz_strncat(d, "#(");
+  pz_strncat_0(d, "#(");
   while (pz_ary_iterate(b, a, &i, &va)) {
-    if (!first) { pz_strncat(d, " "); }
+    if (!first) { pz_strncat_0(d, " "); }
     pz_dump_va(b, va, d);
     first = 0;
   }
-  pz_strncat(d, ")");
+  pz_strncat_0(d, ")");
   return 1;
 }
 
 int pz_pair_dump(void *b, Id p, pz_str_d *d) {
-  pz_strncat(d, "( ");
+  pz_strncat_0(d, "( ");
   pz_pair_iterate_t i;
   i.initialized = 0;
   Id va;
   int first = 1;
   while (pz_pair_iterate(b, p, &i, &va)) {
-    if (!first) { pz_strncat(d, " "); }
+    if (!first) { pz_strncat_0(d, " "); }
     pz_dump_va(b, va, d);
     first = 0;
   }
-  pz_strncat(d, ")");
+  pz_strncat_0(d, ")");
   return 1;
 }
 
@@ -1859,11 +1867,12 @@ int pz_append_quoted_string(void *b, Id s, pz_str_d *d) {
       if (c == '\n' || c == '\r') {
         r[ri++] = '\\'; r[ri] = c == '\n' ? 'n' : 'r';
       } else {
-        snprintf(r + ri, 5, "\\x%x02", c);
-        ri += 2;
+        snprintf(r + ri, 5, "\\x%02x", c);
+        ri += 3;
       }
     } else r[ri] = dt.s[i];
   }
+  r[ri] = 0x0;
   pz_append_format(d, "\"%s\"", (const char *)&r);
   return 1;
 }
@@ -1876,16 +1885,17 @@ int pz_string_dump(void *b, Id s, pz_str_d *d) {
   }
   if (d->dump_inspect || d->dump_debug) 
       return pz_append_quoted_string(b, s, d);
-  pz_append_format(d, "%s", pz_string_ptr(s));
+  PZ_ACQUIRE_STR_D(dt, s, 0);
+  pz_strncat(d, dt.s, dt.l);
   return 1;
 }
 
 int __pz_hash_pair_dump(void *b, pz_ht_entry_t *hr, pz_str_d *d) {
-  pz_strncat(d, "(");
+  pz_strncat_0(d, "(");
   pz_dump_va(b, hr->va_key, d);
-  pz_strncat(d, " . ");
+  pz_strncat_0(d, " . ");
   pz_dump_va(b, hr->va_value, d);
-  pz_strncat(d, ")");
+  pz_strncat_0(d, ")");
   return 1;
 }
 
@@ -1905,14 +1915,14 @@ int pz_ht_dump(void *b, Id va_ht, pz_str_d *d) {
   if (d->dump_debug && ht->va_parent) 
       pz_append_format(d, "[parent:#x%x]", PZ_ADR(ht->va_parent));
 
-  pz_strncat(d, "(#hash ");
+  pz_strncat_0(d, "(#hash ");
   int first = 1;
   while ((hr = pz_ht_iterate(b, va_ht, &h))) {
-    if (!first) { pz_strncat(d, " "); }
+    if (!first) { pz_strncat_0(d, " "); }
     __pz_hash_pair_dump(b, hr, d);
     first = 0;
   }
-  pz_strncat(d, " )");
+  pz_strncat_0(d, " )");
   return 1;
 }
 
@@ -1924,18 +1934,18 @@ int pz_rx_dump(void *b, Id va_rx, pz_str_d *d) {
 
 int pz_char_dump(void *b, Id va_c, pz_str_d *d) {
   uchar c = PZ_CHAR(va_c);
-  if (d->dump_debug) pz_strncat(d, "CHAR:");
+  if (d->dump_debug) pz_strncat_0(d, "CHAR:");
   if (d->dump_debug || d->dump_inspect) {
-    pz_strncat(d, "#\\");
+    pz_strncat_0(d, "#\\");
     int detected = 1;
     switch (c) {
-      case 0x20: pz_strncat(d, "space"); break;
-      case '\n': pz_strncat(d, "newline"); break;
-      case '\r': pz_strncat(d, "return"); break;
+      case 0x20: pz_strncat_0(d, "space"); break;
+      case '\n': pz_strncat_0(d, "newline"); break;
+      case '\r': pz_strncat_0(d, "return"); break;
       default: detected = 0; break;
     }
     if (!detected) {
-      if (c < 0x20 || c > 0x80) pz_append_format(d, "x%x02", c)
+      if (c < 0x20 || c > 0x80) pz_append_format(d, "x%02x", c)
       else pz_append_format(d, "%c", c);
     }
   } else pz_append_format(d, "%c", c);
@@ -1964,14 +1974,14 @@ int __pz_dump_to_d(void *b, Id va, pz_str_d *d) {
       return 1; break; }
     case PZ_TYPE_SPECIAL: {
         if (d->dump_debug) pz_append_format(d, "SPECIAL:#x%lx:", va);
-        pz_strncat(d, pz_special_dump(va));
+        pz_strncat_0(d, pz_special_dump(va));
         return 1; break; }
     case PZ_TYPE_FLOAT: pz_append_format(d, "%f", PZ_FLOAT(va)); return 1; break;
     case PZ_TYPE_LONG: pz_append_format(d, "%ld", PZ_LONG(va)); return 1; break;
     case PZ_TYPE_CHAR: return pz_char_dump(b, va, d); break;
     case PZ_TYPE_BOOL: {
       if (d->dump_debug) pz_append_format(d, "BOOL:%lx:", va); 
-      pz_strncat(d, va ? "#t" : "#f");
+      pz_strncat_0(d, va ? "#t" : "#f");
       return 1; break; }
   }
   return 0;
@@ -1981,11 +1991,11 @@ int pz_dump_to_d(void *b, Id va, pz_str_d *d) {
   if (d->dump_debug) 
       pz_append_format(d, "#x%x:%s<", PZ_ADR(va), pz_type_to_cp(PZ_TYPE(va)));
   int r = __pz_dump_to_d(b, va, d);
-  if (d->dump_debug) pz_strncat(d, ">");
+  if (d->dump_debug) pz_strncat_0(d, ">");
   return r;
 }
 
-int pz_dump_to_string(void *b, Id va, char *dsc, int flags) {
+int pz_dump_to_string(void *b, Id va, char *dsc, size_t *l, int flags) {
   *dsc = 0x0;
   pz_str_d d;
   d.s = dsc;
@@ -1994,12 +2004,13 @@ int pz_dump_to_string(void *b, Id va, char *dsc, int flags) {
   d.dump_inspect = (flags & PZ_DUMP_INSPECT) > 0;
   d.dump_debug = (flags & PZ_DUMP_DEBUG) > 0;
   pz_dump_to_d(b, va, &d);
+  if (l) *l = d.l;
   return 1;
 }
 
 void pz_print_dump(void *b, Id va, int flags) {
   char dsc[16834];
-  pz_dump_to_string(b, va, (char *)&dsc, flags);
+  pz_dump_to_string(b, va, (char *)&dsc, 0, flags);
   printf("%s ", dsc);
 }
 

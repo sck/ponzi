@@ -1,20 +1,21 @@
 (define generated (make-string))
 
-(define emit (lambda (s) (string-append! generated s)))
+(define emit (lambda xs (for-each xs (lambda (s) (string-append! generated s)))))
 
 (define asm-cfunc-call (lambda(cf)
   ; mov rcx,0x100000983
-  (emit (string-append "\x48\xb9" (cfunc->binary-addr-s cf))))
+  (emit "\x48\xb9" (cfunc->binary-addr-s cf)))
   ; call rcx
-  (emit "\xff\xd1"))
+  (emit "\xff\xd1")
+  (displayln "hmmm..."))
 
 (define asm-cfunc-push-parameter (lambda (a8 b8 c8) 
   ; movabsq <c8>, %rdx
-  (emit "\x48\xBA" (binary-addr c8))
+  (emit "\x48\xBA" (va->binary-addr-s c8))
   ; movabsq <b8>, %rsi
-  (emit "\x48\xBE" (binary-addr b8))
+  (emit "\x48\xBE" (va->binary-addr-s b8))
   ;  movabsq <a8>, %rdi
-  (emit "\x48\xBF"  (binary-addr a8))))
+  (emit "\x48\xBF"  (va->binary-addr-s a8))))
 
 (define asm-return (lambda ()
   ;ret

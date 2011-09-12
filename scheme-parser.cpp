@@ -632,6 +632,7 @@ Id pz_makestack(VB) {
 
 Id pz_hash_code(VB) { return pz_long(pz_hash_var(b, ca_f(x))); }
 Id __pz_cfunc_to_bin_adr_s(VB) { return pz_cfunc_to_bin_adr_s(b, ca_f(x)); }
+Id __pz_va_to_bin_adr_s(VB) { return pz_va_to_bin_adr_s(b, ca_f(x)); }
 
 const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list",
@@ -644,7 +645,7 @@ const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "number->string", "load", "eval", "string->symbol", "symbol->string",
     "string-append", "string-append!", "string-copy", "make-string",
     "string-length", "string-ref", "inspect", "dump", "vector-append",
-    "makestack", "hash-code", "cfunc->binary-addr-s", 0};
+    "makestack", "hash-code", "cfunc->binary-addr-s", "va->binary-addr-s", 0};
 
 Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div, 
     pz_gt, pz_lt, pz_ge, pz_le, pz_eq_p, pz_equal_p, pz_eq_p, pz_length,
@@ -660,7 +661,7 @@ Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div,
     __pz_string_append_bang, pz_string_copy, pz_make_string,
     pz_string_length, pz_string_ref, pz_inspect, pz_dump,
     pz_vector_append, pz_makestack, pz_hash_code,
-    __pz_cfunc_to_bin_adr_s, 0};
+    __pz_cfunc_to_bin_adr_s, __pz_va_to_bin_adr_s, 0};
 
 
 void pz_add_std_functions(void *b, Id env) {
@@ -674,14 +675,16 @@ void pz_add_globals(void *b, Id env) {
 
 Id pz_to_string(void *b, Id exp) {
   char dsc[16834];
-  pz_dump_to_string(b, exp, (char *)&dsc, PZ_DUMP_RECURSE);
-  return pz_string_new_c(b, dsc);
+  size_t l = 0;
+  pz_dump_to_string(b, exp, (char *)&dsc, &l, PZ_DUMP_RECURSE);
+  return pz_string_new(b, dsc, l);
 }
 
 Id pz_to_inspect_string(void *b, Id exp) {
   char dsc[16834];
-  pz_dump_to_string(b, exp, (char *)&dsc, PZ_DUMP_RECURSE | PZ_DUMP_INSPECT);
-  return pz_string_new_c(b, dsc);
+  size_t l = 0;
+  pz_dump_to_string(b, exp, (char *)&dsc, &l, PZ_DUMP_RECURSE | PZ_DUMP_INSPECT);
+  return pz_string_new(b, dsc, l);
 }
 
 void pz_repl(void *b, FILE *f, Id filename, int interactive) {
