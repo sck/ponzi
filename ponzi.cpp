@@ -876,6 +876,7 @@ Id __pz_string_sub_str_new(WLB, Id s, int start,
     int _count) {
   PZ_ACQUIRE_STR_D(dt, s, pzNil);
   if (start > dt.l) start = dt.l;
+  if (start < 0) start = 0;
   int count = (_count < 0) ? (dt.l + _count + 1) - start : _count;
   if (count < 0) count = 0;
   if (count > dt.l - start) count = dt.l - start;
@@ -1627,7 +1628,7 @@ Id pz_ary_index(void *b, Id va_ary, int i) {
   pz_array_t *ary; 
   PZ_TYPED_VA_TO_PTR(pz_array_t, ary, va_ary, PZ_TYPE_ARRAY, pzNil);
   if (i < 0) i = ary->size - ary->start + i;
-  if (ary->size - ary->start < i) { return pzNil; } 
+  if (ary->size - ary->start <= i) { return pzNil; } 
   return ary->va_entries[ary->start + i];
 }
 

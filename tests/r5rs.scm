@@ -46,6 +46,10 @@
     (f (eq? "\x00\x01" "\x00\x02")))
   (supports "in-string quotations"
     (t-eq (string-append "test" #\newline #\return #\xff "88" ) "test\n\r\xff88"))
+  (supports "substrings"
+    (t-eq (substring "test" -2 1) "t")
+    (t-eq (substring "test" 0 -2) "tes")
+    (t-eq (substring "test" 1 -2) "es"))
 )
 
 (describe "r5rs implementation"
@@ -91,6 +95,7 @@
   (supports "string operations"
     (t-eq (string-append "1" "2") "12")
     (t-eq (string-append "1" "2") "12")
+    (t-eq (substring "test" 1 2) "es")
     (string-copy "foo"))
   (supports "list operations"
     (t-eq (length (list 1 2 3)) 3)
@@ -106,7 +111,8 @@
     (t-eq (case (* 2 3)
       ((2 3 5 7) 'test 'prime)
       ((1 4 6 8 9) 'test 'composite)) 'composite)
-    (t-eq (case 'foo ('foo 'works) ((else) 'not-working)) 'works))
+    (t-eq (case 'foo ('foo 'works) ((else) 'not-working)) 'works)
+    (t-eq (case "works?" ("works?" 'works) ((else) "NO")) 'works))
   (supports "let*/let"
     (t-eq (let* ((a 1) (b (* 2 3))) b) 6)
     (t-eq (let ((a 1) (b (* 2 3))) b) 6))

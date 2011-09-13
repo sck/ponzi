@@ -604,6 +604,8 @@ Id __pz_string_append_bang(VB) {
     return pz_string_append(b, ca_f(x), ca_s(x)); }
 Id pz_string_copy(VB) { 
     return pz_string_sub_str_new(b, ca_f(x), 0, -1); }
+Id pz_substring(VB) { 
+    return pz_string_sub_str_new(b, ca_f(x), PZ_LONG(ca_s(x)), PZ_LONG(ca_th(x))); }
 Id pz_inspect(VB) { 
     printf("%s ", pz_string_ptr(ca_f(x)));
     pz_print_dump(b, ca_s(x), PZ_DUMP_INSPECT | PZ_DUMP_RECURSE); 
@@ -643,7 +645,7 @@ const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "vector-find", "hash-each", "rx-match-string", "rand", "<<", ">>",
     "not", "sleep", "|", "&", "^", "type-of", "string->number",
     "number->string", "load", "eval", "string->symbol", "symbol->string",
-    "string-append", "string-append!", "string-copy", "make-string",
+    "string-append", "string-append!", "string-copy", "substring", "make-string",
     "string-length", "string-ref", "inspect", "dump", "vector-append",
     "makestack", "hash-code", "cfunc->binary-addr-s", "va->binary-addr-s", 0};
 
@@ -658,7 +660,7 @@ Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div,
     pz_sleep, pz_b_or, pz_b_and, pz_b_xor, pz_type_of,
     pz_string_to_number, pz_number_to_string, __pz_load, __pz_eval,
     pz_string_to_symbol, pz_symbol_to_string, __pz_string_append,
-    __pz_string_append_bang, pz_string_copy, pz_make_string,
+    __pz_string_append_bang, pz_string_copy, pz_substring, pz_make_string,
     pz_string_length, pz_string_ref, pz_inspect, pz_dump,
     pz_vector_append, pz_makestack, pz_hash_code,
     __pz_cfunc_to_bin_adr_s, __pz_va_to_bin_adr_s, 0};

@@ -53,6 +53,45 @@
     (eval (append '(begin) (list-tail xs 1)))))
 (define let let*)
 
+
+(define do (lambda-no-parameter-eval xs
+    (if (= (length xs) 1) 
+      (begin 
+        (p "test-condition" test-condition)
+        (p "test-conseq" test-conseq)
+        (if (eval test-condition) (eval test-conseq) 
+          (begin 
+            (p "body" body)
+            (eval body)
+            (p "after-each-step" after-each-step)
+            (eval after-each-step)
+            (p "i" i)
+            (do 1)
+          ))
+      )
+      (begin (displayln "initialize!")
+        (define init0 (first xs))
+        (define test0 (list-ref xs 1))
+        (define body (append '(begin) (list-tail xs 2)))
+        (define inits '(begin))
+        (define after-each-step '(begin))
+        (for-each init0 (lambda (i) 
+          (define name (first i))
+          (define value (list-ref i 1))
+          (define step (list-ref i 2))
+          (vector-push! inits (list 'define name value))
+          (if step (vector-push! after-each-step (list 'define name step)) #f)
+        ))
+        (eval inits)
+        (p "inits" inits)
+        (p "after-each-step" after-each-step)
+        (define test-condition (first test0))
+        (define test-conseq (append '(begin) (list-tail test0 1)))
+        (p "body" body)
+        (do 1)
+      ))
+))
+
 (define cond (lambda-no-parameter-eval xs
     (define rcond #f)
     (find xs (lambda (x)
@@ -68,6 +107,16 @@
     (find (list-tail xs 1) (lambda (x)
         (define list (first x))
         (if (or (eq? list 'else) (any? list value))
+            (begin (set! rcase (eval (append '(begin) (list-tail x 1)))) #t)
+            #f)))
+    rcase))
+
+(define eval-case (lambda-no-parameter-eval xs
+    (define rcase #f)
+    (define value (eval (first xs)))
+    (find (list-tail xs 1) (lambda (x)
+        (define list (eval (first x)))
+        (if (or (eq? list 'else) (eq? list value))
             (begin (set! rcase (eval (append '(begin) (list-tail x 1)))) #t)
             #f)))
     rcase))
@@ -102,4 +151,7 @@
   (display (- (current-ms) before)) 
   (displayln (quote ms))))
 
+(define reload (lambda () (load "boot.scm")))
+
 (load "compiler.scm")
+
