@@ -57,24 +57,19 @@
 (define do (lambda-no-parameter-eval xs
     (if (= (length xs) 1) 
       (begin 
-        (p "test-condition" test-condition)
-        (p "test-conseq" test-conseq)
         (if (eval test-condition) (eval test-conseq) 
           (begin 
-            (p "body" body)
             (eval body)
-            (p "after-each-step" after-each-step)
             (eval after-each-step)
-            (p "i" i)
             (do 1)
           ))
       )
-      (begin (displayln "initialize!")
+      (begin 
         (define init0 (first xs))
         (define test0 (list-ref xs 1))
         (define body (append '(begin) (list-tail xs 2)))
-        (define inits '(begin))
-        (define after-each-step '(begin))
+        (define inits (append '(begin) '()))
+        (define after-each-step (append '(begin) '()))
         (for-each init0 (lambda (i) 
           (define name (first i))
           (define value (list-ref i 1))
@@ -83,11 +78,8 @@
           (if step (vector-push! after-each-step (list 'define name step)) #f)
         ))
         (eval inits)
-        (p "inits" inits)
-        (p "after-each-step" after-each-step)
         (define test-condition (first test0))
         (define test-conseq (append '(begin) (list-tail test0 1)))
-        (p "body" body)
         (do 1)
       ))
 ))
@@ -155,3 +147,4 @@
 
 (load "compiler.scm")
 
+(define mv (lambda () (define a (make-vector)) (vector-push! a 'foo) a))

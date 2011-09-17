@@ -50,6 +50,8 @@
     (t-eq (substring "test" -2 1) "t")
     (t-eq (substring "test" 0 -2) "tes")
     (t-eq (substring "test" 1 -2) "es"))
+  (supports "case with strings"
+    (t-eq (eval-case "works?" ("works?" 'works) ('else "NO")) 'works))
 )
 
 (describe "r5rs implementation"
@@ -111,11 +113,13 @@
     (t-eq (case (* 2 3)
       ((2 3 5 7) 'test 'prime)
       ((1 4 6 8 9) 'test 'composite)) 'composite)
-    (t-eq (case 'foo ('foo 'works) ((else) 'not-working)) 'works)
-    (t-eq (case "works?" ("works?" 'works) ((else) "NO")) 'works))
+    (t-eq (case 'foo ('foo 'works) ('else 'not-working)) 'works))
   (supports "let*/let"
     (t-eq (let* ((a 1) (b (* 2 3))) b) 6)
     (t-eq (let ((a 1) (b (* 2 3))) b) 6))
+  (supports "do"
+    (t-eq (do ((vec (make-vector 5)) (i 0 (+ i 1))) ((= i 5) vec) 
+        (vector-set!  vec i i)) (list 0 1 2 3 4))))
 
   (displayln "  - load"))
 (load "does-not-exist.scm")

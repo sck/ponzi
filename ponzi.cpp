@@ -45,7 +45,7 @@ int debug = 0;
 typedef size_t Id;
 
 #define PZ_DB_MAGIC 0xF0F0
-#define PZ_DB_VERSION 3
+#define PZ_DB_VERSION 4
 
 #define uchar unsigned char
 
@@ -140,15 +140,20 @@ Id pz_handle_error_with_err_string_nh(const char *ctx,
 #define PZ_PERF_MEM_SIZE (size_t)(1500LL * PZ_STATIC_ALLOC_SIZE)
 
 #ifdef PZ_GC_DEBUG
+#define PZ_GD_MAX_HIST 10
+
 typedef struct {
   const char *where;
   int line;
   int is_new;
+  int deleted;
   const char *retain_where;
   int retain_line;
   int retain_adr;
   size_t release_counter;
   size_t retain_counter;
+  int retain_lines[PZ_GD_MAX_HIST];
+  int release_lines[PZ_GD_MAX_HIST];
 } pz_var_status_t;
 
 pz_var_status_t pz_var_status[PZ_VAR_COUNT];
@@ -159,6 +164,12 @@ void pz_register_var(Id va, WL) {
   pz_var_status[adr].where = w;
   pz_var_status[adr].line = l;
   pz_var_status[adr].is_new = 1;
+}
+
+void pz_unregister_var(Id va) {
+  int adr = PZ_ADR(va);
+  //memset(&(pz_var_status[adr]), 0, sizeof(pz_var_status_t));
+  pz_var_status[adr].deleted = 1;
 }
 #else
 #define pz_register_var(va, where, line)
@@ -223,10 +234,11 @@ open_failed:
  */
 
 // for garbage collection
-// lock + rc + type
-#define RCS (sizeof(int)+sizeof(int)+sizeof(short int))
+// lock + rc + type + flags
+#define RCS (sizeof(int)+sizeof(int)+sizeof(short int)+sizeof(uchar))
 #define rc_t int
 #define PZ_CELL_SIZE int(PZ_STATIC_ALLOC_SIZE - RCS)
+
 
 #ifdef sizeof(size_t) != 8
 #error sizeof(size_t) must be 8 bytes!!
@@ -279,7 +291,14 @@ pz_mem_descriptor_t *__pz_md(void *b) { return (pz_mem_descriptor_t *)b; }
 #define PTR_TO_VA(va, p) \
   PZ_ADR_SET(va, (int)(((p) - RCS - (char *)b) / PZ_STATIC_ALLOC_SIZE));
 
-#define SPEED 
+#define P_0_R(p, r) if (!(p)) { printf("From %s:%d\n", __func__, __LINE__); return (r); }
+#define P_0_R2(w, l, p, r) if (!(p)) { printf("From %s:%d\n", w, l); return (r); }
+#define VA_0_R(va, r) if (!(va)) { return (r); }
+#define VA_TO_PTR(va) (__ca(b, va, __func__, __LINE__) ? VA_TO_PTR0(va) : 0 )
+#define VA_TO_PTR2(va) (__ca(b, va, w, l) ? VA_TO_PTR0(va) : 0 )
+
+
+//#define SPEED 
 
 #ifdef SPEED
 #define __ca(b, va, w, l) 1
@@ -291,12 +310,6 @@ int __ca(void *b, Id va, WL) {
   return 1;
 }
 #endif
-
-#define P_0_R(p, r) if (!(p)) { printf("From %s:%d\n", __func__, __LINE__); return (r); }
-#define P_0_R2(w, l, p, r) if (!(p)) { printf("From %s:%d\n", w, l); return (r); }
-#define VA_0_R(va, r) if (!(va)) { return (r); }
-#define VA_TO_PTR(va) (__ca(b, va, __func__, __LINE__) ? VA_TO_PTR0(va) : 0 )
-#define VA_TO_PTR2(va) (__ca(b, va, w, l) ? VA_TO_PTR0(va) : 0 )
 
 
 Id cb(int i) { return i ? pzTrue : pzNil; }
@@ -369,7 +382,7 @@ int __pz_init_memory(void *b, size_t size) {
     PZ_HEADER_DS(string_constants, PZ_TYPE_ARRAY);
     PZ_HEADER_DS(string_constants_dict, PZ_TYPE_HASH);
     PZ_HEADER_DS(perf_dict, PZ_TYPE_HASH);
-    //PZ_HEADER_DS(gc, PZ_TYPE_HASH); // empty hash, just used for logging.
+    //PZ_HEADER_DS(gc, PZ_TYPE_HASH); // empty hash, just used for locking.
 
     if (PZ_VA_START != adr_counter + 1) {
       printf("Error: PZ_VA_START is %d but it should be %d\n",
@@ -512,8 +525,10 @@ retry_start:
     char *p = VA_TO_PTR0(r);
     rc_t *rc = (rc_t *) (p - RCS + sizeof(int));
     *rc = PZ_RC_JUST_ALLOCATED;
-    short int *t = (short int *)(p - sizeof(short int));
+    short int *t = (short int *)(p - sizeof(short int) - sizeof(uchar));
     *t = type;
+    uchar *f = (uchar *)(p - sizeof(uchar));
+    f = 0x0;
     pz_unlock_va(r);
   }
 finish:
@@ -537,23 +552,35 @@ int pz_zero(void *b, Id va, int size) {
   return 1;}
 
 #define PZ_ALLOC(va, type) va = pz_valloc(b, __func__, type); VA_0_R(va, pzNil);
-#define PZ_ALLOC2(va, type, r) va = pz_valloc(b, __func__, type); VA_0_R(va, r);
 
-#define RCI if (!va || PZ_TYPE(va) < PZ_BASIC_TYPE_BOUNDARY) { return va; }; \
+#define PZ_NO_BASIC_TYPES(v) \
+  if (!va || PZ_TYPE(va) < PZ_BASIC_TYPE_BOUNDARY) { return v; }; 
+
+#define RCI \
+  PZ_NO_BASIC_TYPES(va); \
   char *p0 = VA_TO_PTR0(va); \
-  P_0_R(p0, pzNil); rc_t *rc = (rc_t *)(p0 - RCS + sizeof(int));
+  uchar *flags = (uchar *)(p0 - sizeof(uchar)); \
+  P_0_R(p0, pzNil); rc_t *rc = (rc_t *)(p0 - RCS + sizeof(int)); \
+  rc = rc; flags = flags; 
 
 
 Id show_rc(const char *m, void *b, Id va) {
-  return pzNil;
   if (!debug) return pzNil;
   RCI; 
   printf("%s #x%x rc %d\n", m, PZ_ADR(va), *rc);
   return pzNil;
 }
 
+#define PZ_GCF_RETURN 0x1
+
+#define PZ_GC_RETURN_VALUE_P ((*flags & PZ_GCF_RETURN) > 0)
+#define PZ_GC_CLEAR_RV *flags = *flags & 0xFE
+
+Id pz_gc_mark_return_value(void *b, Id va) {
+    RCI; *flags = *flags | PZ_GCF_RETURN; return va; }
+
 int pz_free(void *b, Id va) {
-  show_rc("pz_free", b, va);
+  //show_rc("pz_free", b, va);
   int t = PZ_TYPE(va);
   if (t == PZ_TYPE_BOOL || t == PZ_TYPE_FLOAT || t == PZ_TYPE_LONG) return 0;
   char *used_chunk_p = VA_TO_PTR(va); P_0_R(used_chunk_p, 0);
@@ -637,25 +664,43 @@ inline int pz_is_type_i(Id va, int t) { return c_type(PZ_TYPE(va)) == c_type(t);
 #define PZ_TYPED_VA_TO_PTR2(ct, p,v,t,r) __PZ_TYPED_VA_TO_PTR2(ct, p,v,t,r,VA_TO_PTR2)
 #define PZ_TYPED_VA_TO_PTR0(ct, p,v,t,r) __PZ_TYPED_VA_TO_PTR(ct, p,v,t,r,VA_TO_PTR0)
 
+size_t pz_max(size_t a, size_t b) { return a > b ? a : b; }
+size_t pz_min(size_t a, size_t b) { return a < b ? a : b; }
+
+#ifdef PZ_GC_DEBUG
+
+void __pz_var_info(void *b, pz_var_status_t *s, const char *m, rc_t *rc, Id r) {
+   char rcd[1024];
+   if (*rc < PZ_RC_JUST_ALLOCATED) snprintf((char*)&rcd, 1023, "%d", *rc);
+   else snprintf((char*)&rcd, 1023, "%s", "<just-allocated>");
+   printf("%s: %s %s:%d ", m, rcd, s->where, s->line );
+   if (*rc > 0) pz_print_dump(b, r, PZ_DUMP_DEBUG | PZ_DUMP_RECURSE);
+   if (s->retain_where) {
+     printf("retain from %s:%d %x %ld:%ld", 
+         s->retain_where,
+         s->retain_line, s->retain_adr, s->retain_counter, 
+         s->release_counter);
+   }
+   size_t i;
+   printf(" rt ");
+   for (i = 0; i < pz_min(s->retain_counter, PZ_GD_MAX_HIST); i++) 
+       printf("%d ", s->retain_lines[i]);
+   printf(" rl ");
+   for (i = 0; i < pz_min(s->release_counter, PZ_GD_MAX_HIST); i++) 
+       printf("%d ", s->release_lines[i]);
+   printf("\n");
+}
 void pz_md_print_var_info(void *b, const char *m, rc_t *rc, Id r, int silent, 
     int only_new) {
   pz_var_status_t *s = &pz_var_status[PZ_ADR(r)];
-  if (!silent && s->is_new) {
-    char rcd[1024];
-    if (*rc < PZ_RC_JUST_ALLOCATED) snprintf((char*)&rcd, 1023, "%d", *rc);
-    else snprintf((char*)&rcd, 1023, "%s", "<just-allocated>");
-    printf("%s: %s %s:%d ", m, rcd, s->where, s->line );
-    pz_print_dump(b, r, PZ_DUMP_DEBUG);
-    if (s->retain_where) {
-      printf("retain from %s:%d %x %ld:%ld", 
-          s->retain_where,
-          s->retain_line, s->retain_adr, s->retain_counter, 
-          s->release_counter);
-    }
-    printf("\n");
+  if (!silent) {
+    if (s->is_new)  __pz_var_info(b, s, m, rc, r);
+    else if (s->deleted) __pz_var_info(b, s, "WHOA: ALREADY DELETED", rc, r);
   }
   if (only_new) pz_var_status[PZ_ADR(r)].is_new = 0;
 }
+
+#endif
 
 
 /*
@@ -674,21 +719,31 @@ Id __pz_release(WLB, Id va, int do_delete = 1) {
   int rv, nv, ov;
   do {
     ov =  *rc;
+#ifdef PZ_GC_DEBUG
     if (*rc <= 1) {
       pz_md_print_var_info(b, "auto-delete", rc, va, 0, 0);
+      printf("---- last delete was: %s %d\n", w, l);
     }
+#endif
     PZ_CHECK_ERROR((*rc <= 1), "Reference counter is already 0!", pzNil);
+#ifdef PZ_GC_DEBUG
     if (ov == PZ_RC_JUST_ALLOCATED) {
       printf("[%s:%d] ", w, l);
       pz_md_print_var_info(b, "release without retain", rc, va, 0, 0);
       return pzNil;
     }
-    if (ov == 2 && !do_delete) { nv = PZ_RC_JUST_ALLOCATED; } 
+#endif
+    if (ov == 2 && (!do_delete || PZ_GC_RETURN_VALUE_P)) { 
+      nv = PZ_RC_JUST_ALLOCATED; } 
     else { nv = ov - 1; }
     rv = pz_atomic_casl(rc, nv, ov);
   } while (rv != ov);
+  if (PZ_GC_RETURN_VALUE_P) PZ_GC_CLEAR_RV;
 #ifdef PZ_GC_DEBUG
-  pz_var_status[PZ_ADR(va)].release_counter++;
+  size_t rrc = pz_var_status[PZ_ADR(va)].release_counter++;
+  if (rrc < PZ_GD_MAX_HIST) {
+    pz_var_status[PZ_ADR(va)].release_lines[rrc] = l;
+  }
 #endif
   //if (debug) {
   //  printf("[%s:%d] rc %d ", w, l, *rc); D("release", va);
@@ -700,6 +755,9 @@ Id __pz_release(WLB, Id va, int do_delete = 1) {
     //  pz_md_print_var_info(b, "auto-delete", rc, va, 0, 0);
     //}
     pz_delete(b, va);
+#ifdef PZ_GC_DEBUG
+    pz_unregister_var(va);
+#endif
   }
   return va;
 }
@@ -714,6 +772,7 @@ int pz_rx_free(void *b, Id va_rx);
 
 #define RetainGuard(from, va) __RetainGuard guard(__func__, __LINE__, b, from, va)
 #define RetainGuard0(va) __RetainGuard guard(__func__, __LINE__, b, pzNil, va)
+#define RetainGuard0n(n, va) __RetainGuard n(__func__, __LINE__, b, pzNil, va)
 #define RG(n) __RetainGuard n(__func__, __LINE__, b)
 class __RetainGuard {
   const char *w;
@@ -738,14 +797,14 @@ public:
 
 Id pz_delete(void *b, Id va) { 
   RCI; 
-  if ((*rc) == 0x0) return pzNil; // ignore, so one can jump at random address!
-  show_rc("pz_delete", b,va);
+  if ((*rc) == 0x0) return pzNil; // ignore, so one can jump to random address!
+  //show_rc("pz_delete", b,va);
   PZ_CHECK_ERROR((*rc != 1), "Cannot delete, rc != 0!", pzNil);
   switch (PZ_TYPE(va)) {
     case PZ_TYPE_PAIR: pz_pair_free(b, va); break;
     case PZ_TYPE_ARRAY: pz_ary_free(b, va); break;
     case PZ_TYPE_HASH: pz_ht_free(b, va); break;
-    case PZ_TYPE_HASH_PAIR: return va; /* ignore: will always be freed by hash */; break;
+    case PZ_TYPE_HASH_PAIR: pz_free(b, va);  break;
     case PZ_TYPE_REGEXP: pz_rx_free(b, va); break; 
     default: pz_free(b, va); break;
   }
@@ -788,16 +847,20 @@ size_t __pz_mem_dump(void *b, int silent) {
 size_t pz_mem_dump(void *b) { return __pz_mem_dump(b, 0); }
 size_t pz_active_entries(void *b) { return __pz_mem_dump(b, 1); }
 
-size_t pz_max(size_t a, size_t b) { return a > b ? a : b; }
-size_t pz_min(size_t a, size_t b) { return a < b ? a : b; }
-
 Id __pz_retain(WLB, Id va_from, Id va) { 
   RCI;
 #ifdef PZ_GC_DEBUG
+  if (*rc != PZ_RC_JUST_ALLOCATED && *rc <= 1) {
+    pz_md_print_var_info(b, "Retain of what has already been freed", 
+        rc, va, 0, 0);
+  }
   pz_var_status[PZ_ADR(va)].retain_where = w;
   pz_var_status[PZ_ADR(va)].retain_line = l;
   pz_var_status[PZ_ADR(va)].retain_adr = PZ_ADR(va_from);
-  pz_var_status[PZ_ADR(va)].retain_counter++;
+  size_t rrc = pz_var_status[PZ_ADR(va)].retain_counter++;
+  if (rrc < PZ_GD_MAX_HIST) {
+    pz_var_status[PZ_ADR(va)].retain_lines[rrc] = l;
+  }
 #endif
   int rv, ov, nv;
   do {
@@ -828,8 +891,8 @@ int pz_strdup(void *b, Id va_dest, const char *source, pz_string_size_t l) {
 #define pz_string_new(b, s, l) __pz_string_new(__func__, __LINE__, b, s, l)
 Id __pz_string_new(WLB, const char *source, pz_string_size_t len) { 
   Id va; PZ_ALLOC(va, PZ_TYPE_STRING);
-  pz_register_var(va, w, l);
   if (!pz_strdup(b, va, source, len)) return pzNil;
+  pz_register_var(va, w, l);
   return va;
 }
 
@@ -838,7 +901,6 @@ Id __pz_string_new_c(WLB, const char *source) {
     return __pz_string_new(w, l, b, source, strlen(source)); }
 
 Id __pz_snn(void *b, Id n, const char *f) { 
-  Id va; PZ_ALLOC(va, PZ_TYPE_STRING);
   int i = PZ_TYPE(n) == PZ_TYPE_LONG;
   char ns[1024]; 
   i ? snprintf(ns, 1023, f, PZ_LONG(n)) : 
@@ -981,6 +1043,9 @@ int pz_string_starts_with_cp_i(void *b, Id va_s, const char *q) {
 }
 
 Id pz_string_replace(void *b, Id va_s, Id va_a, Id va_b) {
+  RetainGuard0(va_s);
+  RetainGuard0n(__ga, va_a);
+  RetainGuard0n(__gb, va_b);
   PZ_ACQUIRE_STR_D(ds, va_s, pzNil); PZ_ACQUIRE_STR_D(da, va_a, pzNil); 
   PZ_ACQUIRE_STR_D(db, va_b, pzNil); 
   Id va_new = pz_string_new_0(b); PZ_ACQUIRE_STR_D(dn, va_new, pzNil);
@@ -1075,10 +1140,10 @@ typedef struct pz_pair_t {
 Id __pz_pair_new(WLB, Id va_first, Id va_rest) {
     Id va_pr; 
     PZ_ALLOC(va_pr, PZ_TYPE_PAIR); 
-    pz_register_var(va_pr, w, l);
     pz_pair_t *p; PZ_TYPED_VA_TO_PTR(pz_pair_t, p, va_pr, PZ_TYPE_PAIR, pzNil);
     p->va_first = pz_retain2(va_pr, va_first);
     p->va_rest = pz_retain2(va_pr, va_rest);
+    pz_register_var(va_pr, w, l);
     return va_pr; }
 
 // iterate
@@ -1139,10 +1204,10 @@ typedef struct {
 Id __pz_ht_new(WLB) {
     Id va_ht; 
     PZ_ALLOC(va_ht, PZ_TYPE_HASH); 
-    pz_register_var(va_ht, w, l);
     //pz_lock_va(va_ht);
     pz_zero(b, va_ht, sizeof(pz_hash_t)); 
     //pz_unlock_va(va_ht);
+    pz_register_var(va_ht, w, l);
     return va_ht; }
 
 size_t pz_ht_hash(void *b, Id va_s) {
@@ -1181,7 +1246,7 @@ Id __pz_ht_delete(WLB, Id va_ht, Id va_key) {
     p = (pz_ht_entry_t *)VA_TO_PTR(va_p);
     if (p) { p->va_next = hr->va_next; }
     else { ht->va_buckets[k] = pzNil; }
-    pz_release(hr->va_value); pz_release(hr->va_key); pz_free(b, va_hr);
+    pz_release(hr->va_value); pz_release(hr->va_key); pz_release(va_hr);
     ht->size -= 1;
     return pzTrue; 
   next: va_p = va_hr;
@@ -1195,16 +1260,11 @@ int __pz_ht_free(void *b, Id va_ht) {
     for (va_hr = ht->va_buckets[k]; va_hr != 0 && hr != NULL; va_hr = hr->va_next) {
       PZ_TYPED_VA_TO_PTR(pz_ht_entry_t, hr, va_hr, PZ_TYPE_HASH_PAIR, 0); 
       pz_release(hr->va_value); pz_release(hr->va_key); 
-      if (va_p) { pz_release(va_p); pz_free(b, va_p); }
+      if (va_p) pz_release(va_p);
       va_p = va_hr;
     }
   }
-  if (va_p) { 
-    show_rc("ht_free: BR", b, va_p);
-      pz_release(va_p); 
-    show_rc("ht_free", b, va_p);
-    pz_free(b, va_p); 
-  }
+  if (va_p) pz_release(va_p);
   pz_free(b, va_ht);
   return 1;
 }
@@ -1272,19 +1332,21 @@ Id __pz_ht_set(WLB, Id va_ht, Id va_key, Id va_value) {
   pz_ht_entry_t *hr; pz_ht_lookup(b, &hr, va_ht, va_key, &exists);
   size_t v = 0;
   Id va_hr = 0;
+  pz_retain2(va_hr, va_value);
+
   if (!exists) { 
     v = pz_ht_hash(b, va_key);
     PZ_ALLOC(va_hr, PZ_TYPE_HASH_PAIR);
-    pz_register_var(va_hr, w, l);
     pz_retain2(va_ht, va_hr); 
     hr = (pz_ht_entry_t *)VA_TO_PTR(va_hr); P_0_R(hr, pzNil);
     hr->va_key = pz_retain2(va_hr, va_key);
     ht->size += 1;
+    pz_register_var(va_hr, w, l);
   } else {
     pz_release(hr->va_value);
   }
 
-  hr->va_value = pz_retain2(va_hr, va_value);
+  hr->va_value = va_value;
 
   if (!exists) {
     hr->va_next = ht->va_buckets[v];
@@ -1295,6 +1357,7 @@ Id __pz_ht_set(WLB, Id va_ht, Id va_key, Id va_value) {
 
 #define pz_intern(s) __pz_intern(b, s)
 Id __pz_intern(void *b, Id va_s) { 
+  RetainGuard0(va_s);
   Id dict = PZ_TYPE(va_s) == PZ_TYPE_SYMBOL ? 
       pz_symbol_interns : pz_string_interns;
   Id sv = va_s; 
@@ -1417,11 +1480,11 @@ typedef struct { Id (*func_ptr)(void *b, Id, pz_interp_t *); Id name; } pz_cfunc
 Id __pz_define_func(WLB, 
     const char *name, Id (*p)(void *, Id, pz_interp_t *), Id env) { 
   Id va_f; PZ_ALLOC(va_f, PZ_TYPE_CFUNC);
-  pz_register_var(va_f, w, l);
   pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR0(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, pzNil);
   cf->func_ptr = p;
   cf->name = pz_intern(pz_to_symbol(S(name)));
   pz_ht_set(b, env, cf->name, va_f);
+  pz_register_var(va_f, w, l);
   return pzTrue;
 }
 
@@ -1467,9 +1530,11 @@ void __ary_retain_all(void *b, Id from, pz_array_t *a) {
   for (i = a->start; i < a->size; i++) pz_retain(from, a->va_entries[i]);
 }
 
-#define pz_ary_clone(b, va_s) __pz_ary_clone(b, va_s, -1, -1)
-#define pz_ary_clone_part(b, va_s, s, c) __pz_ary_clone(b, va_s, s, c)
-Id __pz_ary_clone(void *b, Id va_s, int start, int count) {
+#define pz_ary_clone(b, va_s) \
+    __pz_ary_clone(__func__, __LINE__, b, va_s, -1, -1)
+#define pz_ary_clone_part(b, va_s, s, c) \
+    __pz_ary_clone(__func__, __LINE__, b, va_s, s, c)
+Id __pz_ary_clone(WLB, Id va_s, int start, int count) {
   pz_array_t *ary_s; 
   PZ_TYPED_VA_TO_PTR(pz_array_t, ary_s, va_s, PZ_TYPE_ARRAY, pzNil);
   Id va_c; PZ_ALLOC(va_c, PZ_TYPE_ARRAY); pz_zero(b, va_c, 0); 
@@ -1483,6 +1548,7 @@ Id __pz_ary_clone(void *b, Id va_s, int start, int count) {
   a->start = start;
   a->size = start + count;
   __ary_retain_all(b, va_c, a);
+  pz_register_var(va_c, w, l);
   return va_c;
 }
 
@@ -1494,7 +1560,9 @@ int pz_ary_free(void *b, Id va_ary) {
   return 1;
 }
 
-Id pz_ary_new_join(void *b, Id a, Id o) {
+#define pz_ary_new_join(b, a, o) \
+  __pz_ary_new_join(__func__, __LINE__, b, a, o)
+Id __pz_ary_new_join(WLB, Id a, Id o) {
   pz_array_t *aa; PZ_TYPED_VA_TO_PTR(pz_array_t, aa, a, PZ_TYPE_ARRAY, pzNil);
   pz_array_t *ab; PZ_TYPED_VA_TO_PTR(pz_array_t, ab, o, PZ_TYPE_ARRAY, pzNil);
   Id n; PZ_ALLOC(n, PZ_TYPE_ARRAY); pz_zero(b, n, 0); 
@@ -1506,6 +1574,7 @@ Id pz_ary_new_join(void *b, Id a, Id o) {
   memcpy(&an->va_entries[aas], &ab->va_entries[ab->start], 
       (ab->size - ab->start) * sizeof(Id));
   __ary_retain_all(b, n, an);
+  pz_register_var(n, w, l);
   return n;
 }
 
@@ -1603,9 +1672,17 @@ Id pz_ary_set(void *b, Id va_ary, int i, Id va) {
   PZ_TYPED_VA_TO_PTR(pz_array_t, ary, va_ary, PZ_TYPE_ARRAY, pzNil);
   PZ_CHECK_ERROR((ary->start + i >= PZ_ARY_MAX_ENTRIES), 
       "array index too large", pzNil);
-  if (i - ary->start > ary->size) ary->size = i - ary->start;
+  pz_retain(va_ary, va);
+  if ((i + 1) - ary->start > ary->size) {
+     int ns = i + 1 - ary->start;
+     int i;
+     for (i = ary->size + ary->start; i < ns + ary->start; i++) {
+       ary->va_entries[i] = 0x0;
+     }
+     ary->size = ns;
+  }
   Id va_o = ary->va_entries[ary->start + i];
-  if (va_o) pz_release(va_o);
+  if (va_o) pz_release(va_o); 
   ary->va_entries[ary->start + i] = va;
   return va;
 }
@@ -1681,6 +1758,7 @@ int pz_ary_equals_i(void *b, Id a, Id o) {
 #define pz_string_split(b, s, sep) \
     __pz_string_split(__func__, __LINE__, b, s, sep)
 Id __pz_string_split(WLB, Id va_s, char sep) {
+  RetainGuard0(va_s);
   PZ_ACQUIRE_STR_D(ds, va_s, pzNil);
   if (ds.l == 0) return pzNil;
   Id va_ary = __pz_ary_new(w, l, b);
@@ -1788,6 +1866,33 @@ int pz_rx_match(void *b, Id va_rx, Id va_s) {
 
 int pz_dump_to_d(void *b, Id va, pz_str_d *d);
 
+uchar pz_dump_status[PZ_VAR_COUNT / 8];
+
+#define PZ_ONLY_REFER_TYPES(v) \
+  PZ_NO_BASIC_TYPES(v); \
+  int t = PZ_TYPE(va); \
+  if (!(t == PZ_TYPE_HASH || t == PZ_TYPE_ARRAY || t == PZ_TYPE_PAIR || \
+      t == PZ_TYPE_HASH_PAIR)) return v;
+
+  
+
+int pz_dump_have_va_p(Id va) {
+  PZ_ONLY_REFER_TYPES(0);
+  size_t adr = PZ_ADR(va);
+  uchar b = pz_dump_status[adr >> 3];
+  return (b & (1 << (adr % 8))) > 0;
+}
+
+int pz_dump_mark_va(Id va) {
+  PZ_ONLY_REFER_TYPES(0);
+  size_t adr = PZ_ADR(va);
+  size_t i = adr >> 3;
+  uchar b = pz_dump_status[i];
+  pz_dump_status[i] = b | (1 << (adr % 8));
+  return 1;
+}
+
+
 #define pz_strncat_0(d, s) if (!__pz_strncat_0(d, s)) return 0;
 #define pz_strncat(d, s, l) if (!__pz_strncat(d, s, l)) return 0;
 
@@ -1807,6 +1912,11 @@ int __pz_strncat_0(pz_str_d *d, const char *s) { return __pz_strncat(d, s, strle
   pz_strncat_0(d, bs); }
 
 int pz_dump_va(void *b, Id va, pz_str_d *d) {
+  if (pz_dump_have_va_p(va)) {
+    pz_strncat_0(d, " ... ");
+    return 0;
+  }
+  pz_dump_mark_va(va);
   if (d->dump_recurse) {
     pz_dump_to_d(b, va, d);
     return 1;
@@ -2004,6 +2114,7 @@ int pz_dump_to_string(void *b, Id va, char *dsc, size_t *l, int flags) {
   d.dump_recurse = (flags & PZ_DUMP_RECURSE) > 0;
   d.dump_inspect = (flags & PZ_DUMP_INSPECT) > 0;
   d.dump_debug = (flags & PZ_DUMP_DEBUG) > 0;
+  memset(&pz_dump_status, 0, sizeof(pz_dump_status));
   pz_dump_to_d(b, va, &d);
   if (l) *l = d.l;
   return 1;
@@ -2016,7 +2127,8 @@ void pz_print_dump(void *b, Id va, int flags) {
 }
 
 int pz_register_string_constant(void *b, Id _s) {
-  Id s = pz_intern(_s);
+  RG(sg);
+  Id s = pz_intern(sg = _s);
   Id v;
   if ((v = pz_ht_get(b, pz_string_constants_dict, s))) return PZ_LONG(v);
   pz_ary_push(b, pz_string_constants, s);

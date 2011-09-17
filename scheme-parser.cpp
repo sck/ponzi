@@ -31,7 +31,7 @@ Id pz_string_parse(void *b, Id s) {
       Id sr = S("(string-constant ");
       pz_string_append(b, sr, pz_string_new_number(b, pz_long(i)));
       pz_string_append(b, sr, IS(")"));
-      pz_ary_push(b, r, sr);
+      pz_ary_push(b, r, pz_intern(sr));
     }
     string_mode = 1 - string_mode;
   }
@@ -43,16 +43,17 @@ Id pz_string_parse(void *b, Id s) {
 
 Id pz_tokenize(void *b, Id va_s) {
   if (!va_s) return pzNil;
-  pz_retain0(va_s);
-  Id r1, r2, r3;
+  RetainGuard0(va_s);
+  //RG(r1); RG(r2); RG(r3);
+  //Id r1, r2, r3;
   Id r = pz_string_split(b,
-      (r1 = pz_string_replace(b, 
-        (r2 = pz_string_replace(b, 
-          (r3 = pz_string_replace(b, va_s, 
+      (pz_string_replace(b, 
+        (pz_string_replace(b, 
+          (pz_string_replace(b, va_s, 
             IS("\n"), IS(" \n "))),
         IS("("), IS(" ( "))), 
       IS(")"), IS(" ) "))), ' ');
-  pz_release_ja(r1); pz_release_ja(r2); pz_release_ja(r3); pz_release(va_s);
+  //pz_release_ja(r1); pz_release_ja(r2); pz_release_ja(r3); pz_release(va_s);
   return r;
 }
 
@@ -134,6 +135,7 @@ Id pz_atom(void *b, Id token) {
 
 #define RETURN(v) { rv = v; goto finish; }
 Id __pz_read_from(void *b, pz_interp_t *pi, Id tokens) {
+  //D("tokens", tokens);
   Id rv = pzNil;
   int quote = 0;
 
@@ -149,6 +151,7 @@ next_token:
    if (pz_ary_len(b, tokens) == 0) RETURN(pzNil);
    pz_release(token);
    token = pz_retain0(pz_ary_unshift(b, tokens));
+   //D("t", token);
    ignore_token = pz_string_equals_cp_i(token, "");
    if (!ignore_token && pz_string_equals_cp_i(token, "\n")) {
      pi->ps->line_number++;
@@ -162,6 +165,7 @@ next_token:
       pz_release(token);
       token = word; 
     } else {
+      pz_release(word);
       goto next_token;
     }
   }
@@ -240,7 +244,7 @@ Id pz_begin(void *b, Id x, int start, pz_interp_t *pi);
 Id pz_lambda(void *b, Id x, Id env);
 Id pz_eval(void *b, Id x, pz_interp_t* pi) {
   //if (pz_perf_observe_hotspots_p()) { printf("Would observe hotspots!\n"); }
-  Id x0, exp, val, var, vars, rv, env;
+  Id x0, exp, val, var, rv, env;
   pi->_x = x;
   nested_depth++;
   if (stack_overflow) return pzNil;
@@ -249,11 +253,11 @@ Id pz_eval(void *b, Id x, pz_interp_t* pi) {
     stack_overflow = 1;
     return pz_handle_parse_error_with_err_string("Stack overflow", ""); 
   }
-  //RetainGuard0(_env);
-  pz_retain0(pi->_env);
+  RetainGuard0(pi->_env);
+  //pz_retain0(pi->_env);
   Id func_name = pzNil;
 tail_rc_start:
-  val= pzNil; vars = pzNil; rv = pzNil;
+  val= pzNil; rv = pzNil;
   if (!x) RETURN(pzNil);
   env = (pi->_env ? pi->_env : pz_globals);
   if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
@@ -335,7 +339,7 @@ tail_rc_start:
 
     Id vars = gv = pz_ary_new(b);
     int i = 1;
-    while (pz_ary_iterate(b, x, &i, &v)) 
+    while (pz_ary_iterate(b, x, &i, &v))
         pz_ary_push(b, vars, no_parameter_eval ? v : pz_eval2(v, env, 0));
     if (is_cfunc) RETURN(pz_call(b, lambda, vars, pi));
     int tail_rc = 0;
@@ -365,15 +369,18 @@ tail_rc_start:
       pn._env = e;
       pn._prev = pi->_this;
       pn.last = 0;
-      Id r =  pz_eval(b, lambda_body(lambda), &pn);
+      //Id r = pz_retain0(pz_eval(b, lambda_body(lambda), &pn));
+      Id r = pz_eval(b, lambda_body(lambda), &pn);
+      if (pi->last) pz_gc_mark_return_value(b, r);
+      //show_rc("after eval", b, r);
       RETURN(r);
     }
   }
 
 finish:
-  pz_release(vars);
+  //pz_release(vars);
   if (rv == pzTail && !pz_eq_i(pi->_this, pi->_prev)) { goto tail_rc_start; }
-  pz_release(pi->_env);
+  //pz_release(pi->_env);
   nested_depth--;
   return rv;
 }
@@ -388,7 +395,7 @@ Id pz_begin(void *b, Id x, int start, pz_interp_t *pi) {
   while (pz_ary_iterate(b, x, &i, &exp)) {
     pn.last = l == i;
     val = pz_eval(b, exp, &pn);
-    if (l == i) pz_retain0(val);
+    //if (l == i) pz_gc_mark_return_value(b, val);
   }
   return val;
 }
@@ -428,14 +435,15 @@ Id  __try_convert_to_ints(void *b, Id x) {
 }
 
 #define ON_I \
+  RG(tryg); \
   int t = (pz_ary_contains_only_type_i(b, x, PZ_TYPE_LONG) ? 1 : \
       (pz_ary_contains_only_type_i(b, x, PZ_TYPE_FLOAT) ? 2 : 0)); \
   if (t == 0) { \
       Id _try = __try_convert_to_ints(b, x);  \
-      if (_try) { t = 1; x = _try; }} \
+      if (_try) { t = 1; x = tryg = _try; }} \
   if (t == 0) { \
       Id _try = __try_convert_to_floats(b, x);  \
-      if (_try) { t = 2; x = _try; }} \
+      if (_try) { t = 2; x = tryg = _try; }} \
   int ai = PZ_LONG(ca_f(x)); int bi = PZ_LONG(ca_s(x)); \
   float af = PZ_FLOAT(ca_f(x)); float bf = PZ_FLOAT(ca_s(x)); \
   Id r = pzNil; \
@@ -590,7 +598,7 @@ Id __pz_eval(VB)  {
   pz_interp_t pn;
   pz_interp_init(&pn, pi);
   pn.last = 1;
-  pn._this = S("eval");
+  pn._this = ISS("eval");
   return pz_eval(b, ca_f(x), &pn); 
 }
 Id pz_string_to_symbol(VB)  { return pz_to_symbol(ca_f(x)); }
@@ -715,6 +723,7 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
       printf("===> %s\n", pz_string_ptr(sg = pz_to_inspect_string(b, val)));
     }
     pz_release(val);
+    //pz_mem_dump(b);
   }
   pz_release(filename);
 }

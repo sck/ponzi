@@ -10,7 +10,6 @@
   ; call rcx
   (emit *CALL-RCX*)))
 
-
 (define *MOV-RDX-IMM* "\x48\xBA")
 
 (define asm-cfunc-push-parameter (lambda (a8 b8 c8) 
@@ -26,15 +25,23 @@
   ;ret
   (emit *RET*)))
 
-(define disassemble (lambda () 
-  (define s (string-copy generated))
-  (define start1 (substring generated 0 1))
-  (define start2 (substring generated 0 2))
-  (eval-case start1
-    (*RET* (displayln "RET!")))
-  (eval-case start2 
-    (*MOV-RCX-IMM* (displayln "CALL!"))
-    (*MOV-RDX-IMM* (displayln "PARAMETERS")))
+(define disassemble (lambda ()
+  (do 
+    ((s (string-copy generated)) 
+     (i 0 (+ i 1)))
+    ;((> (string-length s) 0))
+    ((= i 2))
+    (define start1 (substring s 0 1))
+    (define start2 (substring s 0 2))
+    (define skip 1)
+    (displayln "s: " s ", skip0: " skip)
+    (eval-case start1
+      (*RET* (displayln "RET!") (define skip 1)))
+    (eval-case start2 
+      (*MOV-RCX-IMM* (displayln "CALL!") (define skip 12))
+      (*MOV-RDX-IMM* (displayln "PARAMETERS") (define skip 30))
+    (displayln "s: " s ", skip: " skip)
+    (define s (substring s skip -1))))
 ))
 
 (define compile (lambda (tokens)
