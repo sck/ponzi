@@ -53,7 +53,6 @@
     (eval (append '(begin) (list-tail xs 1)))))
 (define let let*)
 
-
 (define do (lambda-no-parameter-eval xs
     (if (= (length xs) 1) 
       (begin 

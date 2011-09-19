@@ -723,7 +723,7 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
       printf("===> %s\n", pz_string_ptr(sg = pz_to_inspect_string(b, val)));
     }
     pz_release(val);
-    //pz_mem_dump(b);
+    pz_mem_dump(b);
   }
   pz_release(filename);
 }
