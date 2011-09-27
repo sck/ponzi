@@ -150,7 +150,7 @@ next_token:
   do {
    if (pz_ary_len(b, tokens) == 0) RETURN(pzNil);
    pz_release(token);
-   token = pz_retain0(pz_ary_unshift(b, tokens));
+   token = pz_retain0(pz_ary_shift(b, tokens));
    //D("t", token);
    ignore_token = pz_string_equals_cp_i(token, "");
    if (!ignore_token && pz_string_equals_cp_i(token, "\n")) {
@@ -175,11 +175,11 @@ next_token:
     while (!pz_string_equals_cp_i(ca_f(tokens), ")")) {
        if (pz_string_equals_cp_i(ca_f(tokens), "\n")) {
          pi->ps->line_number++;
-         pz_release_ja(pz_ary_unshift(b, tokens));
+         pz_release_ja(pz_ary_shift(b, tokens));
        } else pz_ary_push(b, l, __pz_read_from(b, pi, tokens)); 
        CE(break) 
     }
-    pz_release_ja(pz_ary_unshift(b, tokens));
+    pz_release_ja(pz_ary_shift(b, tokens));
     RETURN(l);
   } else if (pz_string_equals_cp_i(token, ")")) {
     RETURN(pz_handle_parse_error_with_err_string_nh("unexpected )",
@@ -488,7 +488,7 @@ Id pz_vector_set(VB)  { return pz_ary_set(b, ca_f(x), PZ_LONG(ca_s(x)),
 Id pz_vector_get(VB)  { return pz_ary_index(b, ca_f(x), PZ_LONG(ca_s(x))); }
 Id pz_vector_push(VB)  { return pz_ary_push(b, ca_f(x), ca_s(x)); }
 Id pz_vector_pop(VB)  { return pz_ary_pop(b, ca_f(x)); }
-Id pz_vector_unshift(VB)  { return pz_ary_unshift(b, ca_f(x)); }
+Id pz_vector_shift(VB)  { return pz_ary_shift(b, ca_f(x)); }
 Id pz_vector_length(VB)  { return pz_long(pz_ary_len(b, ca_f(x))); }
 Id pz_string_constant(VB)  { 
     return pz_ary_index(b, pz_string_constants, PZ_LONG(ca_f(x))); }
@@ -648,7 +648,7 @@ const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "equal?", "eq?", "length", "cons", "car", "cdr", "list",
     "display", "current-ms", "make-hash", "hash-set!", "hash-get",
     "hash-delete!", "make-vector", "vector-get", "vector-set!",
-    "vector-push!", "vector-pop!", "vector-unshift!", "vector-length",
+    "vector-push!", "vector-pop!", "vector-shift!", "vector-length",
     "vector-tail", "string-constant", "string-split", "vector-each",
     "vector-find", "hash-each", "rx-match-string", "rand", "<<", ">>",
     "not", "sleep", "|", "&", "^", "type-of", "string->number",
@@ -662,7 +662,7 @@ Id (*pz_std_f[])(VB) = {pz_add, pz_sub, pz_mul, pz_div,
     pz_cons, pz_car, pz_cdr, pz_list, pz_display, pz_current_ms,
     pz_make_hash, pz_hash_set, pz_hash_get, pz_hash_delete,
     pz_make_vector, pz_vector_get, pz_vector_set, pz_vector_push,
-    pz_vector_pop, pz_vector_unshift, pz_vector_length, pz_vector_tail,
+    pz_vector_pop, pz_vector_shift, pz_vector_length, pz_vector_tail,
     pz_string_constant, _pz_string_split, pz_vector_each, pz_vector_find,
     pz_hash_each, _pz_rx_match_string, pz_rand, pz_shl, pz_shr, pz_not,
     pz_sleep, pz_b_or, pz_b_and, pz_b_xor, pz_type_of,

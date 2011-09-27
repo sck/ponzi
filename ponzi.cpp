@@ -240,10 +240,6 @@ open_failed:
 #define PZ_CELL_SIZE int(PZ_STATIC_ALLOC_SIZE - RCS)
 
 
-#ifdef sizeof(size_t) != 8
-#error sizeof(size_t) must be 8 bytes!!
-#endif
-
 #define PZ_TYPE_BOOL 0
 #define PZ_TYPE_FLOAT 1
 #define PZ_TYPE_LONG 2
@@ -1425,6 +1421,10 @@ Id __pz_env_find_and_set(WLB, Id va_ht, Id va_key, Id va_value) {
 void pz_add_globals(void *b, Id env);
 
 void pz_setup() {
+  if (sizeof(size_t) != 8) {
+    printf("size_t must be 8 bytes in size!\n");
+    exit(1);
+  }
   PZ_TYPE_SET(pzTrue, PZ_TYPE_BOOL);
   PZ_LONG_SET(pzTrue, 1);
   PZ_TYPE_SET(pzTail, PZ_TYPE_SPECIAL);
@@ -1473,7 +1473,8 @@ struct pz_interp_t {
   pz_interp_t *previous_ip;
 };
 
-typedef struct { Id (*func_ptr)(void *b, Id, pz_interp_t *); Id name; } pz_cfunc_t;
+typedef struct { Id (*func_ptr)(void *b, Id, pz_interp_t *); Id name; } 
+    pz_cfunc_t;
 
 #define pz_define_func(b, n, p, e) \
     __pz_define_func(__func__, __LINE__, b, n, p, e)
@@ -1489,7 +1490,8 @@ Id __pz_define_func(WLB,
 }
 
 Id pz_call(void *b, Id va_f, Id x, pz_interp_t *pi) { 
-  pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, pzNil);
+  pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, 
+      pzNil);
   Id r = cf->func_ptr(b, x, pi);
   return r;
 }
@@ -1659,7 +1661,7 @@ Id pz_ary_map(void *b, Id va_ary, Id (*func_ptr)(void *b, Id)) {
   return r;
 }
 
-Id pz_ary_unshift(void *b, Id va_ary) {
+Id pz_ary_shift(void *b, Id va_ary) {
   pz_array_t *ary; 
   PZ_TYPED_VA_TO_PTR(pz_array_t, ary, va_ary, PZ_TYPE_ARRAY, pzNil);
   if (ary->size - ary->start <= 0) { return pzNil; } 
