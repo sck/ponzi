@@ -13,7 +13,7 @@
 (define *MOV-RSI-IMM* "\x48\xBE")
 (define *MOV-RDI-IMM* "\x48\xBF")
 
-(define asm-cfunc-push-parameter (lambda (a8 b8 c8)
+(define asm-cfunc-push-parameters (lambda (a8 b8 c8)
   (emit *MOV-RDX-IMM* (va->binary-addr-s c8))
   (emit *MOV-RSI-IMM* (va->binary-addr-s b8))
   (emit *MOV-RDX-IMM*  (va->binary-addr-s a8))))
@@ -21,6 +21,15 @@
 (define *RET* "\xC3")
 (define asm-return (lambda ()
   (emit *RET*)))
+
+(define cfunc-to-bin-adr (make-hash))
+(define bin-adr-to-cfunc (make-hash))
+
+(hash-each globals (lambda (k v) 
+    (if (cfunc? v) (begin 
+      (hash-set! cfunc-to-bin-adr k (cfunc->binary-addr-s v)) 
+      (hash-set! bin-adr-to-cfunc (cfunc->binary-addr-s v) k))
+      #f)))
 
 (define disassemble (lambda ()
   (do 
@@ -46,12 +55,19 @@
   (case (type-of tokens)
     ('lambda (displayln "lambda: " tokens) (compile (list-ref tokens 1)))
     ('vector (displayln "vector: " tokens) 
-      (define x0 (vector-unshift! tokens))
+      (define x0 (vector-shift! tokens))
       (case x0 
         ('quote (displayln "quote"))
         ('/# (displayln "/#"))
         ('if (displayln "if"))
         ('begin (displayln "begin") (vector-each tokens (lambda (x) (compile x))))
-        (else (displayln "unknown symbol: " x0)))))))
+        (else 
+            (define bin (hash-get cfunc-to-bin-adr x0))
+            (if bin 
+              (asm-cfunc-push-parameters )
+              (displayln "unknown symbol:" x0))
+            )
+        )
+      ))))
 
 (displayln "compiler loaded")

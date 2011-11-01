@@ -2,6 +2,8 @@
  * Copyright (c) 2010, 2011, Sven C. Koehler
  */
 
+#define NEW 1
+
 #include <stdio.h>
 #include <errno.h>
 #include <stdlib.h>
@@ -15,6 +17,7 @@
 #include <sys/time.h>
 #include <semaphore.h>
 #include <signal.h>
+
 
 namespace ponzi {
 
@@ -1463,23 +1466,58 @@ typedef struct {
   int interactive;
 } pz_parse_t;
 
+#ifdef NEW
+#define PZ_MAX_STACK 2000
+
+struct pz_stack_frame_t {
+  Id func_name;
+  Id env;
+  Id x;
+  int last;
+};
+
+struct pz_interp_t {
+  pz_parse_t *ps;
+  size_t nested_depth;
+  int stack_overflow;
+  pz_stack_frame_t frames[2000];
+};
+
+#else
+
 struct pz_interp_t {
   pz_parse_t *ps;
   Id _this;
   Id _prev;
   Id _env;
   Id _x;
+  size_t nested_depth;
+  int stack_overflow;
   int last;
   pz_interp_t *previous_ip;
 };
 
+#endif
+
+
+#ifdef NEW
+typedef struct { Id (*func_ptr)(void *b, Id, pz_interp_t *, 
+    pz_stack_frame_t *sf); Id name; } pz_cfunc_t;
+#else
 typedef struct { Id (*func_ptr)(void *b, Id, pz_interp_t *); Id name; } 
     pz_cfunc_t;
+#endif
 
 #define pz_define_func(b, n, p, e) \
     __pz_define_func(__func__, __LINE__, b, n, p, e)
 Id __pz_define_func(WLB, 
-    const char *name, Id (*p)(void *, Id, pz_interp_t *), Id env) { 
+#ifdef NEW
+    const char *name, Id (*p)(void *, Id, pz_interp_t *, 
+    pz_stack_frame_t *sf), Id env
+#else
+    const char *name, Id (*p)(void *, Id, pz_interp_t *), Id env
+#endif
+  ) {
   Id va_f; PZ_ALLOC(va_f, PZ_TYPE_CFUNC);
   pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR0(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, pzNil);
   cf->func_ptr = p;
@@ -1487,13 +1525,6 @@ Id __pz_define_func(WLB,
   pz_ht_set(b, env, cf->name, va_f);
   pz_register_var(va_f, w, l);
   return pzTrue;
-}
-
-Id pz_call(void *b, Id va_f, Id x, pz_interp_t *pi) { 
-  pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, 
-      pzNil);
-  Id r = cf->func_ptr(b, x, pi);
-  return r;
 }
 
 Id pz_cfunc_to_bin_adr_s(void *b, Id va_f) { 
@@ -1507,6 +1538,21 @@ Id pz_va_to_bin_adr_s(void *b, Id va) {
   return pz_string_new(b, (const char *)&adr, sizeof(size_t));
 }
 
+#ifdef NEW
+Id pz_call(void *b, Id va_f, Id x, pz_interp_t *pi, pz_stack_frame_t *sf) { 
+#else
+Id pz_call(void *b, Id va_f, Id x, pz_interp_t *pi) { 
+#endif
+  pz_cfunc_t *cf; PZ_TYPED_VA_TO_PTR(pz_cfunc_t, cf, va_f, PZ_TYPE_CFUNC, 
+      pzNil);
+#ifdef NEW
+  Id r = cf->func_ptr(b, x, pi, sf);
+#else
+  Id r = cf->func_ptr(b, x, pi);
+#endif
+  return r;
+}
+
 /*
  * Array
  */
@@ -1516,7 +1562,7 @@ typedef struct {
   int size;
   int start; 
   int lambda;
-  int lambda_no_parameter_eval;
+  int macro;
   int line_number;
   Id va_entries[PZ_ARY_MAX_ENTRIES];
 } pz_array_t;
@@ -1629,15 +1675,15 @@ int pz_ary_is_lambda(void *b, Id va_ary) {
   return ary->lambda;
 }
 
-int pz_ary_set_lambda_no_parameter_eval(void *b, Id va_ary) {
+int pz_ary_set_macro(void *b, Id va_ary) {
   pz_array_t *ary; PZ_TYPED_VA_TO_PTR(pz_array_t, ary, va_ary, PZ_TYPE_ARRAY, 0);
-  ary->lambda_no_parameter_eval = 1;
+  ary->macro = 1;
   return 1;
 }
 
-int pz_ary_is_lambda_no_parameter_eval(void *b, Id va_ary) {
+int pz_ary_is_macro(void *b, Id va_ary) {
   pz_array_t *ary; PZ_TYPED_VA_TO_PTR(pz_array_t, ary, va_ary, PZ_TYPE_ARRAY, 0);
-  return ary->lambda_no_parameter_eval;
+  return ary->macro;
 }
 
 int pz_ary_set_line_number(void *b, Id va_ary, int line_number) {
@@ -2180,7 +2226,11 @@ unsigned long pz_current_time_ms() {
   return now.tv_sec * 1000 + (now.tv_usec / 1000);
 }
 
+#ifdef NEW
+#include "eval.cpp"
+#else
 #include "scheme-parser.cpp"
+#endif
 
 void pz_setup_perf() {
   void *b = pz_perf;
@@ -2239,6 +2289,7 @@ int main(int argc, char **argv) {
   //if (pz_perf_mode) test_perf();
   if (pz_perf_mode) b = pz_perf;
   debug = 1;
+  // new_pz_repl(b, fin, S(scm_filename), pz_interactive);
   pz_repl(b, fin, S(scm_filename), pz_interactive);
   return 0;
 }

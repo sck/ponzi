@@ -1,15 +1,15 @@
 #! ./ponzi 
 
-(define describe (lambda-no-parameter-eval xs
+(define describe (macro xs
   (define what (eval (first xs)))
-  (define supports (lambda-no-parameter-eval xs
+  (define supports (macro xs
     (define message (eval (first xs)))
-    (define t (lambda-no-parameter-eval (v) (define r (eval v)) (if (eq? r #t) #t (displayln "Error: `" v "' => " r))))
-    (define f (lambda-no-parameter-eval (v) (define r (eval v)) (if (eq? r #t) (displayln "Error: `" v "' => " r) #t)))
-    (define t-eq (lambda-no-parameter-eval (a0 b0) (define a (eval a0)) (define b (eval b0)) (if (equal? a b) #t (displayln "Error: `" a0 "' expected to be: => " b0 ", but was: " a))))
+    (define t (macro (v) (define r (eval v)) (if (eq? r #t) #t (displayln "Error: `" v "' => " r))))
+    (define f (macro (v) (define r (eval v)) (if (eq? r #t) (displayln "Error: `" v "' => " r) #t)))
+    (define t-eq (macro (a0 b0) (define a (eval a0)) (define b (eval b0)) (if (equal? a b) #t (displayln "Error: `" a0 "' expected to be: => " b0 ", but was: " a))))
     (displayln "  - " message)
     (eval (append '(begin) (list-tail xs 1)))))
-  (define no-crash-when (lambda-no-parameter-eval xs
+  (define no-crash-when (macro xs
     (define message (eval (first xs)))
     (displayln "  - " message)
     (eval (append '(begin) (list-tail xs 1)))))
@@ -52,6 +52,15 @@
     (t-eq (substring "test" 1 -2) "es"))
   (supports "case with strings"
     (t-eq (eval-case "works?" ("works?" 'works) ('else "NO")) 'works))
+  (supports "iteration"
+    (define n 0)
+    (vector-each (list->vector '(1 2 3 4)) (lambda (v) (set! n (+ n v))))
+    (t-eq n 10)
+    (define n 0)
+    ;;(hash-each (#hash (1 . 10) (2 . 20)) 
+    ;;    (lambda (k v) (set! n (+ (+ n k) v))))
+    ;;(t-eq n 10)
+  )
 )
 
 (describe "r5rs implementation"
@@ -98,7 +107,9 @@
     (t-eq (string-append "1" "2") "12")
     (t-eq (string-append "1" "2") "12")
     (t-eq (substring "test" 1 2) "es")
-    (string-copy "foo"))
+    (string-copy "foo")
+    (t-eq (string-length "foo") 3)
+    (t-eq (string-ref "test" 1) #\e))
   (supports "list operations"
     (t-eq (length (list 1 2 3)) 3)
     (t-eq (list-ref (list 1 2 3) 1) 2)

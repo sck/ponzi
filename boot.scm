@@ -1,8 +1,8 @@
 (define p inspect)
 (define find vector-find)
-(define or (lambda-no-parameter-eval xs 
+(define or (macro xs 
     (define ror #f) (find xs (lambda (v) (if (eval v) (set! ror #t) #f))) ror))
-(define and (lambda-no-parameter-eval xs 
+(define and (macro xs 
     (define rand #t) (find xs (lambda (v) (if (eval v) #f (begin (set!  rand #f) #t))))
     rand))
 (define first car)
@@ -32,6 +32,8 @@
 (define cfunc? (lambda (w) (define t (type-of w)) (eq? t 'cfunc)))
 (define null? (lambda (w) (eq? w '())))
 
+(define list->vector (lambda (list) list))
+
 
 (define newline (lambda () (display #\newline)))
 (define resetline (lambda () (display #\return)))
@@ -42,7 +44,7 @@
     (vector-each xs (lambda (v) (hash-set! h (car v) (cdr v))))
     h))
 
-(define let* (lambda-no-parameter-eval xs
+(define let* (macro xs
     (define bindings (first xs))
     (eval (begin 
       (define a (make-vector)) 
@@ -53,7 +55,7 @@
     (eval (append '(begin) (list-tail xs 1)))))
 (define let let*)
 
-(define do (lambda-no-parameter-eval xs
+(define do (macro xs
     (if (= (length xs) 1) 
       (begin 
         (if (eval test-condition) (eval test-conseq) 
@@ -83,7 +85,7 @@
       ))
 ))
 
-(define cond (lambda-no-parameter-eval xs
+(define cond (macro xs
     (define rcond #f)
     (find xs (lambda (x)
         (define t (first x))
@@ -92,7 +94,7 @@
             #f)))
     rcond))
 
-(define case (lambda-no-parameter-eval xs
+(define case (macro xs
     (define rcase #f)
     (define value (eval (first xs)))
     (find (list-tail xs 1) (lambda (x)
@@ -102,7 +104,7 @@
             #f)))
     rcase))
 
-(define eval-case (lambda-no-parameter-eval xs
+(define eval-case (macro xs
     (define rcase #f)
     (define value (eval (first xs)))
     (find (list-tail xs 1) (lambda (x)

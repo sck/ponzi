@@ -3,9 +3,12 @@
  */
 
 
+#define pz_should_not_reach_here()  \
+  fprintf(stderr, "Should not reach here\n"); abort();
+
 Id pz_to_string(void *b, Id exp);
 
-#define VB void *b, Id x, pz_interp_t *pi
+#define VB void *b, Id x, pz_interp_t *pi, pz_stack_frame_t *sf
 
 #define pz_handle_parse_error_with_err_string_nh(m,ln) \
     __pz_handle_parse_error_with_err_string(__func__, b, m, 0, ln, pi->ps)
@@ -18,6 +21,262 @@ Id __pz_handle_parse_error_with_err_string(const char *w, void *b,
   snprintf(es, 1023, "%s:%d: %s", pz_string_ptr(ps->filename), ln, error_msg);
   return pz_handle_error_with_err_string(w, es, h); 
 }
+
+#define NVB void *b, Id x, pz_interp_t *pi, pz_stack_frame_t *sf
+#define NVP b, x, pi, sf
+Id pz_e_exec_procedure(void *b, Id x, pz_interp_t *pi, Id func_name = pzNil, 
+    Id env = pzNil);
+Id pz_dispatch(void *b, Id x, pz_interp_t* pi, pz_stack_frame_t *sf);
+Id pz_begin(NVB, int start);
+Id pz_lambda(void *b, Id x, Id env);
+
+#define PZ_ED(name,block) \
+Id pz_e_##name(NVB) { \
+  Id env = sf->env; env = env; \
+  block \
+}
+
+#define pz_e(x,last) __pz_e(b, x, pi, sf, last)
+
+Id __pz_e(void *b, Id x, pz_interp_t* pi, pz_stack_frame_t *sf, int last) {
+  sf->last = last; 
+  return pz_dispatch(b, x, pi, sf);
+}
+
+PZ_ED(globals, { return pz_globals; })
+PZ_ED(vars, { return pz_retain(sf->func_name, env); })
+PZ_ED(string_interns, { return pz_string_interns; })
+PZ_ED(symbol_interns, { return pz_symbol_interns; })
+PZ_ED(string_constants, { return pz_string_constants; })
+PZ_ED(string_constants_dict, { return pz_string_constants_dict; })
+PZ_ED(xtrue, { return pzTrue; })
+PZ_ED(xfalse, { return pzNil; })
+PZ_ED(env_find, { return pz_env_find(b, env, x); })
+PZ_ED(literal, { return x; })
+PZ_ED(cons_pair, {
+  Id a = pz_ary_new(b);
+  pz_ary_push(b, a, pz_e(ca_f(x), 0));
+  pz_ary_push(b, a, pz_e(ca_th(x), 1));
+  return a;
+})
+PZ_ED(quote, { return ca_s(x); })
+PZ_ED(rx, { 
+  Id rx = pz_rx_new(pz_ary_join_by_s(b,  
+      pz_ary_clone_part(b, x, 1, -1), IS(" ")));
+  return rx;
+}) 
+PZ_ED(xif, {
+  Id test = ca_s(x); Id conseq = ca_th(x); Id alt = ca_fth(x);
+  Id t = pz_e(test, 0);
+  return cnil2(b, t) ? pz_e(conseq, 1) : pz_e(alt, 1);
+})
+PZ_ED(set_bang, {
+  Id var = ca_s(x); Id exp = ca_th(x);
+  return pz_env_find_and_set(b, env, var, pz_e(exp, 0));
+})
+PZ_ED(define, {
+  Id var = ca_s(x); Id exp = ca_th(x);
+  return pz_ht_set(b, env, var, pz_e(exp, 1));
+})
+PZ_ED(lambda, { return pz_lambda(b, x, env); })
+PZ_ED(macro, { Id l = pz_lambda(b, x, env); pz_ary_set_macro(b, l); return l; })
+PZ_ED(begin, { return pz_begin(NVP, 1); })
+PZ_ED(proc, {
+  RG(gv);
+  Id func_name = ca_f(x);
+  Id lambda = pz_env_find(b, env, func_name);
+  if (!lambda) { 
+    RG(sg);
+    return pz_handle_parse_error_with_err_string("Unknown proc", 
+        pz_string_ptr(sg = pz_to_string(b, func_name)));
+  }
+  int is_cfunc = pz_is_type_i(lambda, PZ_TYPE_CFUNC);
+  int no_parameter_eval = !is_cfunc && pz_ary_is_macro(b, lambda);
+
+  Id vars = gv = pz_ary_new(b); Id v; int i = 1;
+  while (pz_ary_iterate(b, x, &i, &v))
+      pz_ary_push(b, vars, no_parameter_eval ? v : pz_e(v, 0));
+  if (is_cfunc) return pz_call(b, lambda, vars, pi, sf);
+  int tail_rc = 0;
+  int is_tail_call = pz_eq_i(func_name, sf->func_name);
+  if (is_tail_call) tail_rc = sf->last;
+  RG(eg);
+  Id e = tail_rc ? env : (eg = pz_env_new(b, 
+      no_parameter_eval ? env : lambda_env_ctx(lambda))); Id p;
+  Id vdecl = lambda_vdecl(lambda);
+  if (PZ_TYPE(vdecl) == PZ_TYPE_ARRAY) {
+    if (pz_ary_len(b, vdecl) != pz_ary_len(b, vars))  {
+       char es[1024]; 
+       snprintf(es, 1023, "Parameter count mismatch! (have %d, expected %d)", 
+           pz_ary_len(b, vars), pz_ary_len(b, vdecl));  
+       return pz_handle_parse_error_with_err_string(es, 
+           pz_string_ptr(func_name));
+    }
+    i = 0;
+    while (pz_ary_iterate(b, vdecl, &i, &p)) 
+        pz_ht_set(b, e, p, pz_ary_index(b, vars, i - 1));
+  } else {
+    pz_ht_set(b, e, vdecl, vars);
+  }
+  if (tail_rc) return pzTail;
+  return pz_e_exec_procedure(b, lambda_body(lambda), pi, func_name, e);
+})
+
+// ...
+
+class ScopeGuard {
+  void *b;
+  Id env;
+public:
+  ScopeGuard(void *_b, Id _env) : b(_b), env(_env) { pz_retain0(env); }
+  ~ScopeGuard() { pz_release(env); }
+};
+
+#define PZ_CURRENT_STACK_FRAME &pi->frames[pi->nested_depth - 1]
+
+Id pz_e_stack_frame(void *b, Id x, pz_interp_t *pi, Id env) {
+  if (pi->stack_overflow) return pzNil;
+  if (pi->nested_depth >= PZ_MAX_STACK) {
+    pi->stack_overflow = 1;
+    return pz_handle_parse_error_with_err_string("Stack overflow", ""); 
+  }
+  pi->nested_depth++;
+  pz_stack_frame_t *sf = PZ_CURRENT_STACK_FRAME;
+  memset(sf, 0, sizeof(pz_stack_frame_t));
+  sf->env = env ? env : pz_globals;
+  if (pi->nested_depth > 1) {
+    pz_stack_frame_t *psf = &pi->frames[pi->nested_depth - 2];
+    sf->func_name = psf->func_name;
+  }
+  return pzTrue;
+}
+
+Id pz_e_exec_procedure(void *b, Id x, pz_interp_t *pi, Id func_name, Id env) {
+  ScopeGuard g(b, env);
+  // create new stack frame
+  if (!pz_e_stack_frame(b, x, pi, env)) return pzNil;
+  pz_stack_frame_t *sf = PZ_CURRENT_STACK_FRAME;
+  sf->x = x;
+  sf->func_name = func_name;
+tail_rc_start:
+  Id rv = pz_dispatch(b, x, pi, PZ_CURRENT_STACK_FRAME);
+  if (rv == pzTail) { 
+    // env will already have been prepared by pz_e_proc
+    goto tail_rc_start; 
+  }
+  // XXX: Mark for return, adjust REPL!
+  pz_gc_mark_return_value(b, rv);
+  pi->nested_depth--;
+  return rv;
+}
+
+Id pz_begin(NVB, int start) {
+  if (!pz_e_stack_frame(b, x, pi, sf->env)) return pzNil;
+  pz_stack_frame_t *_sf = PZ_CURRENT_STACK_FRAME;
+  _sf->x = x;
+  Id val = pzNil, exp;
+  int i = start;
+  int l = pz_ary_len(b, x);
+  while (pz_ary_iterate(b, x, &i, &exp)) {
+    _sf->last = l == i;
+    val = pz_dispatch(b, exp, pi, _sf);
+  }
+  pi->nested_depth--;
+  return val;
+}
+
+Id pz_dispatch(void *b, Id x, pz_interp_t* pi, pz_stack_frame_t *sf) {
+  // XXX: ask: have compiled version?
+  if (!x) return pzNil;
+  if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
+    if (pz_string_equals_cp_i(x, "globals")) return pz_e_globals(NVP);
+    if (pz_string_equals_cp_i(x, "vars")) return pz_e_vars(NVP);
+    if (pz_string_equals_cp_i(x, "string-interns")) 
+        return pz_e_string_interns(NVP);
+    if (pz_string_equals_cp_i(x, "symbol-interns")) 
+        return pz_e_symbol_interns(NVP);
+    if (pz_string_equals_cp_i(x, "string-constants")) 
+        return pz_e_string_constants(NVP);
+    if (pz_string_equals_cp_i(x, "string-constants-dict")) 
+        return pz_e_string_constants_dict(NVP);
+    if (pz_string_equals_cp_i(x, "#t")) return pz_e_xtrue(NVP);
+    if (pz_string_equals_cp_i(x, "#f")) return pz_e_xfalse(NVP);
+    return pz_e_env_find(NVP);
+  } else if (PZ_TYPE(x) != PZ_TYPE_ARRAY) return pz_e_literal(NVP);
+  if (PZ_TYPE(x) == PZ_TYPE_ARRAY && pz_ary_len(b, x) == 3) {
+    Id m = ca_s(x);
+    if (PZ_TYPE(m) == PZ_TYPE_SYMBOL && pz_string_equals_cp_i(m, ".")) 
+        return pz_e_cons_pair(NVP);
+  }
+  if (pz_ary_len(b, x) == 0) {
+    RG(sg);
+    return pz_handle_parse_error_with_err_string("No proc given", 
+        pz_string_ptr(sg = pz_to_string(b, sf->func_name))); 
+  }
+  Id x0 = ca_f(x);
+  if (!pz_is_string(x0)) {
+    RG(sg);
+    return pz_handle_parse_error_with_err_string("Not a symbol type", 
+        pz_string_ptr(sg = pz_to_string(b, sf->func_name)));
+  }
+  if (pz_string_equals_cp_i(x0, "quote")) {
+    return pz_e_quote(NVP);
+  } else if (pz_string_equals_cp_i(x0, "/#")) { // (/# ^regexp$)
+    return pz_e_rx(NVP);
+  } else if (pz_string_equals_cp_i(x0, "if")) { // (if test conseq alt)
+    return pz_e_xif(NVP);
+  } else if (pz_string_equals_cp_i(x0, "set!")) { // (set! var exp)
+    return pz_e_set_bang(NVP);
+  } else if (pz_string_equals_cp_i(x0, "define")) { // (define var exp)
+    return pz_e_define(NVP);
+  } else if (pz_string_equals_cp_i(x0, "lambda")) { //(lambda (var*) exp)
+    return pz_e_lambda(NVP);
+  } else if (pz_string_equals_cp_i(x0, "macro")) {
+    return pz_e_macro(NVP);
+  } else if (pz_string_equals_cp_i(x0, "begin")) {  // (begin exp*)
+    return pz_e_begin(NVP);
+  } else {  // (proc exp*)
+    return pz_e_proc(NVP);
+  }
+  pz_should_not_reach_here();
+}
+
+Id __pz_vector_find(NVB, int check_brk = 1) {
+  RG(sg);
+  Id e = sg = pz_env_new(b, sf->env);
+  Id lambda = ca_s(x);
+  Id vdecl, pn = 0;
+  int l;
+  if (!pz_is_type_i(lambda, PZ_TYPE_CFUNC)) {
+    vdecl = ca_f(lambda);
+    l = pz_ary_len(b, vdecl);
+    pn = l > 0 ? ca_f(vdecl) : pzNil;
+  }
+  int i = 0; 
+  Id v;
+  Id brk = pzNil;
+  if (!pz_e_stack_frame(b, x, pi, sf->env)) return pzNil;
+  pz_stack_frame_t *_sf = PZ_CURRENT_STACK_FRAME;
+  _sf->x = x;
+  _sf->env = e;
+  Id vec = ca_f(x);
+  while ((!check_brk || (check_brk && !brk)) && 
+      pz_ary_iterate(b, vec, &i, &v)) {
+    if (pz_is_type_i(lambda, PZ_TYPE_CFUNC)) {
+      Id vars = pz_retain0(pz_ary_new(b));
+      pz_ary_push(b, vars, v);
+      brk = pz_call(b, lambda, vars, pi, _sf);
+      pz_release(vars);
+    } else {
+      if (pn) pz_ht_set(b, e, pn, v);
+      brk = pz_dispatch(b, lambda_body(lambda), pi, _sf);
+    }
+  }
+  pi->nested_depth--;
+  return check_brk ? v : pzNil;
+}
+
+
 
 Id pz_string_parse(void *b, Id s) {
   if (!s) return pzNil;
@@ -209,189 +468,10 @@ Id pz_parse(void *b, pz_interp_t *pi, Id va_s) {
   return r;
 }
 
-//int pz_perf_observe_hotspots_p() {
-//  void *b = pz_perf;
-//  return pz_ht_get(b, pz_perf_dict, ISS("observe-hotspots"));
-//}
-
-void pz_interp_init(pz_interp_t *dest, pz_interp_t* src) {
-  dest->ps = src->ps;
-  dest->_env = src->_env;
-  dest->_x = pzNil;
-  dest->_this = src->_this;
-  dest->_prev = src->_prev;
-  dest->last = 0;
-  dest->nested_depth = 0;
-  dest->stack_overflow = 0;
-  dest->previous_ip = src;
-}
-
-#define DC2B(va) pz_deep_copy(b, pz_perf, va)
-#define DC2P(va) pz_deep_copy(pz_perf, b, va)
 Id pz_eval(void *b, Id x, pz_interp_t* pi);
-#define pz_eval2(x, e, l) __pz_eval2(b, x, e, l, pi)
-Id __pz_eval2(void *b, Id x, Id env, int last, pz_interp_t *pi) {
-  pz_interp_t pn; 
-  pz_interp_init(&pn, pi); pn._env = env; pn.last = last; 
-  return pz_eval(b, x, &pn);
-}
 
 size_t rc_count = 0;
 Id pz_begin(void *b, Id x, int start, pz_interp_t *pi);
-Id pz_lambda(void *b, Id x, Id env);
-
-Id pz_eval(void *b, Id x, pz_interp_t* pi) {
-  //if (pz_perf_observe_hotspots_p()) { printf("Would observe hotspots!\n"); }
-  Id x0, exp, var, rv, env;
-  pi->_x = x;
-  pi->nested_depth++;
-  if (pi->stack_overflow) return pzNil;
-  if (pi->nested_depth > 2000) {
-    pi->stack_overflow = 1;
-    return pz_handle_parse_error_with_err_string("Stack overflow", ""); 
-  }
-  RetainGuard0(pi->_env);
-  Id func_name = pzNil;
-tail_rc_start:
-  rv = pzNil;
-  if (!x) RETURN(pzNil);
-  env = (pi->_env ? pi->_env : pz_globals);
-  if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
-    if (pz_string_equals_cp_i(x, "globals")) RETURN(pz_globals);
-    if (pz_string_equals_cp_i(x, "vars")) RETURN(pz_retain(pi->_this, env));
-    //if (pz_string_equals_cp_i(x, "perf-dict")) RETURN(pz_perf_dict);
-    if (pz_string_equals_cp_i(x, "string-interns")) RETURN(pz_string_interns);
-    if (pz_string_equals_cp_i(x, "symbol-interns")) RETURN(pz_symbol_interns);
-    if (pz_string_equals_cp_i(x, "string-constants")) RETURN(pz_string_constants);
-    if (pz_string_equals_cp_i(x, "string-constants-dict")) RETURN(pz_string_constants_dict);
-    if (pz_string_equals_cp_i(x, "#t")) RETURN(pzTrue);
-    if (pz_string_equals_cp_i(x, "#f")) RETURN(pzNil);
-    RETURN(pz_env_find(b, env, x));
-  } else if (PZ_TYPE(x) != PZ_TYPE_ARRAY) {
-    RETURN(x); // constant literal
-  }
-  if (PZ_TYPE(x) == PZ_TYPE_ARRAY && pz_ary_len(b, x) == 3) {
-    Id m = ca_s(x);
-    if (PZ_TYPE(m) == PZ_TYPE_SYMBOL && pz_string_equals_cp_i(m, ".")) {
-      Id a = pz_ary_new(b);
-      pz_ary_push(b, a, pz_eval2(ca_f(x), env, 0));
-      pz_ary_push(b, a, pz_eval2(ca_th(x), env, 1));
-      RETURN(a);
-    }
-  }
-  if (pz_ary_len(b, x) == 0) {
-    RG(sg);
-    RETURN(pz_handle_parse_error_with_err_string("No proc given", 
-        pz_string_ptr(sg = pz_to_string(b, pi->_this)))); 
-  }
-  x0 = ca_f(x);
-  if (!pz_is_string(x0)) {
-    RG(sg);
-    RETURN(pz_handle_parse_error_with_err_string("Not a symbol type", 
-        pz_string_ptr(sg = pz_to_string(b, pi->_this))));
-  }
-  if (pz_string_equals_cp_i(x0, "quote")) {
-    //RETURN(pz_e_quote(b, x, pi));
-    RETURN(ca_s(x));
-  } else if (pz_string_equals_cp_i(x0, "/#")) { // (/# ^regexp$)
-    Id rx = pz_rx_new(pz_ary_join_by_s(b,  
-        pz_ary_clone_part(b, x, 1, -1), IS(" ")));
-    return rx;
-  } else if (pz_string_equals_cp_i(x0, "if")) { // (if test conseq alt)
-    Id test = ca_s(x), conseq = ca_th(x), alt = ca_fth(x);
-    Id t = pz_eval2(test, env, 0);
-    RETURN(cnil2(b, t) ? pz_eval2(conseq, env, 1) : pz_eval2(alt, env, 1));
-  } else if (pz_string_equals_cp_i(x0, "set!")) { // (set! var exp)
-    var = ca_s(x), exp = ca_th(x);
-    RETURN(pz_env_find_and_set(b, env, var, pz_eval2(exp, env, 0)));
-  } else if (pz_string_equals_cp_i(x0, "define")) { // (define var exp)
-    var = ca_s(x), exp = ca_th(x);
-    RETURN(pz_ht_set(b, env, var, pz_eval2(exp, env, 1)));
-  } else if (pz_string_equals_cp_i(x0, "lambda")) { //(lambda (var*) exp)
-    RETURN(pz_lambda(b, x, env));
-  } else if (pz_string_equals_cp_i(x0, "macro")) { 
-    Id l = pz_lambda(b, x, env);
-    pz_ary_set_macro(b, l);
-    RETURN(l);
-  } else if (pz_string_equals_cp_i(x0, "begin")) {  // (begin exp*)
-    RETURN(pz_begin(b, x, 1, pi));
-  //} else if (pz_string_equals_cp_i(x0, "begin-perf")) {  // (begin-perf exp*)
-  //  if (b == pz_perf) return pzNil;
-  //  RETURN(DC2B(pz_begin(pz_perf, DC2P(x), 1, 
-  //      env == pz_globals ? pzNil : DC2P(env), //DC2P(env), 
-  //      DC2P(_this), DC2P(_this), ps)));
-  } else {  // (proc exp*)
-    Id v;
-    RG(gv);
-    func_name = x0;
-    Id lambda = pz_env_find(b, env, func_name);
-    if (!lambda) { 
-      RG(sg);
-      RETURN(pz_handle_parse_error_with_err_string("Unknown proc", 
-          pz_string_ptr(sg = pz_to_string(b, func_name))));
-    }
-    int is_cfunc = pz_is_type_i(lambda, PZ_TYPE_CFUNC);
-    int no_parameter_eval = !is_cfunc && 
-        pz_ary_is_macro(b, lambda);
-
-    Id vars = gv = pz_ary_new(b);
-    int i = 1;
-    while (pz_ary_iterate(b, x, &i, &v))
-        pz_ary_push(b, vars, no_parameter_eval ? v : pz_eval2(v, env, 0));
-    if (is_cfunc) RETURN(pz_call(b, lambda, vars, pi));
-    int tail_rc = 0;
-    if (pz_eq_i(func_name, pi->_this)) tail_rc = pi->last;
-    RG(eg);
-    Id e = tail_rc ? env : (eg = pz_env_new(b, 
-        no_parameter_eval ? env : lambda_env_ctx(lambda))), p;
-    Id vdecl = lambda_vdecl(lambda);
-    if (PZ_TYPE(vdecl) == PZ_TYPE_ARRAY) {
-      if (pz_ary_len(b, vdecl) != pz_ary_len(b, vars))  {
-         char es[1024]; 
-         snprintf(es, 1023, "Parameter count mismatch! (have %d, expected %d)", 
-             pz_ary_len(b, vars), pz_ary_len(b, vdecl));  
-         RETURN(pz_handle_parse_error_with_err_string(es, 
-             pz_string_ptr(func_name)));
-      }
-      i = 0;
-      while (pz_ary_iterate(b, vdecl, &i, &p)) 
-          pz_ht_set(b, e, p, pz_ary_index(b, vars, i - 1));
-    } else {
-      pz_ht_set(b, e, vdecl, vars);
-    }
-    if (tail_rc) RETURN(pzTail);
-    {
-      pz_interp_t pn;
-      pz_interp_init(&pn, pi);
-      pn._this = func_name;
-      pn._env = e;
-      pn._prev = pi->_this;
-      pn.last = 0;
-      Id r = pz_eval(b, lambda_body(lambda), &pn);
-      if (pi->last) pz_gc_mark_return_value(b, r);
-      RETURN(r);
-    }
-  }
-
-finish:
-  if (rv == pzTail && !pz_eq_i(pi->_this, pi->_prev)) { goto tail_rc_start; }
-  pi->nested_depth--;
-  return rv;
-}
-
-Id pz_begin(void *b, Id x, int start, pz_interp_t *pi) {
-  Id val = pzNil, exp;
-  int i = start;
-  int l = pz_ary_len(b, x);
-  pz_interp_t pn;
-  pz_interp_init(&pn, pi);
-  pn._prev = pn._this;
-  while (pz_ary_iterate(b, x, &i, &exp)) {
-    pn.last = l == i;
-    val = pz_eval(b, exp, &pn);
-  }
-  return val;
-}
 
 Id pz_lambda(void *b, Id x, Id env) {
   Id l = pz_ary_new(b); 
@@ -480,62 +560,28 @@ Id pz_cmd_display(VB) {
 }
 Id pz_cmd_current_ms(VB) { return pz_long((int)pz_current_time_ms());}
 Id pz_cmd_make_hash(VB) { return pz_ht_new(b); }
-Id pz_cmd_hash_set(VB) { return pz_ht_set(b, ca_f(x), ca_s(x), ca_th(x)); }
+Id pz_cmd_hash_set_bang(VB) { return pz_ht_set(b, ca_f(x), ca_s(x), ca_th(x)); }
 Id pz_cmd_hash_get(VB)  { return pz_ht_get(b, ca_f(x), ca_s(x)); }
-Id pz_cmd_hash_delete(VB) { return pz_ht_delete(b, ca_f(x), ca_s(x)); }
+Id pz_cmd_hash_delete_bang(VB) { return pz_ht_delete(b, ca_f(x), ca_s(x)); }
 Id pz_cmd_make_vector(VB) { return pz_ary_new(b); }
-Id pz_cmd_vector_set(VB) { return pz_ary_set(b, ca_f(x), PZ_LONG(ca_s(x)), 
+Id pz_cmd_vector_set_bang(VB) { return pz_ary_set(b, ca_f(x), PZ_LONG(ca_s(x)), 
     ca_th(x)); }
 Id pz_cmd_vector_get(VB) { return pz_ary_index(b, ca_f(x), PZ_LONG(ca_s(x))); }
 Id pz_cmd_vector_push(VB) { return pz_ary_push(b, ca_f(x), ca_s(x)); }
-Id pz_cmd_vector_pop(VB)  { return pz_ary_pop(b, ca_f(x)); }
-Id pz_cmd_vector_shift(VB) { return pz_ary_shift(b, ca_f(x)); }
+Id pz_cmd_vector_pop_bang(VB)  { return pz_ary_pop(b, ca_f(x)); }
+Id pz_cmd_vector_shift_bang(VB) { return pz_ary_shift(b, ca_f(x)); }
 Id pz_cmd_vector_length(VB) { return pz_long(pz_ary_len(b, ca_f(x))); }
 Id pz_cmd_string_constant(VB) { 
     return pz_ary_index(b, pz_string_constants, PZ_LONG(ca_f(x))); }
 Id pz_cmd_string_split(VB) { 
     return pz_string_split2(b, ca_f(x), ca_s(x)); }
 
-Id __pz_vector_find(void *b, Id x, pz_interp_t* pi, int check_brk = 1) {
-  RG(sg);
-  Id e = sg = pz_env_new(b, pi->_env);
-  Id lambda = ca_s(x);
-  Id vdecl, pn = 0;
-  int l;
-  if (!pz_is_type_i(lambda, PZ_TYPE_CFUNC)) {
-    vdecl = ca_f(lambda);
-    l = pz_ary_len(b, vdecl);
-    pn = l > 0 ? ca_f(vdecl) : pzNil;
-  }
-  int i = 0; 
-  Id v;
-  Id brk = pzNil;
-  pz_interp_t pnew;
-  pz_interp_init(&pnew, pi);
-  pnew._env = e;
-  pnew._prev = pi->_this;
-  pnew._this = pi->_this;
-  while ((!check_brk || (check_brk && !brk)) && 
-      pz_ary_iterate(b, ca_f(x), &i, &v)) {
-    if (pz_is_type_i(lambda, PZ_TYPE_CFUNC)) {
-      Id vars = pz_retain0(pz_ary_new(b));
-      pz_ary_push(b, vars, v);
-      brk = pz_call(b, lambda, vars, pi);
-      pz_release(vars);
-    } else {
-      if (pn) pz_ht_set(b, e, pn, v);
-      brk = pz_eval(b, lambda_body(lambda), &pnew);
-    }
-  }
-  return check_brk ? v : pzNil;
-}
-
-Id pz_cmd_vector_each(VB) { return __pz_vector_find(b, x, pi, 0); }
-Id pz_cmd_vector_find(VB) { return __pz_vector_find(b, x, pi); }
+Id pz_cmd_vector_each(VB) { return __pz_vector_find(b, x, pi, sf, 0); }
+Id pz_cmd_vector_find(VB) { return __pz_vector_find(b, x, pi, sf); }
 
 Id pz_cmd_hash_each(VB) { 
   RG(sg);
-  Id e = sg = pz_env_new(b, pi->_env);
+  Id e = sg = pz_env_new(b, sf->env);
   Id lambda = ca_s(x);
   Id vdecl = ca_f(lambda);
   int l = pz_ary_len(b, vdecl);
@@ -545,16 +591,18 @@ Id pz_cmd_hash_each(VB) {
   pz_ht_iterate_t h;
   h.initialized = 0;
   pz_ht_entry_t *hr;
-  pz_interp_t pnew;
-  pz_interp_init(&pnew, pi);
-  pnew._env = e;
-  pnew._prev = pi->_this;
-  pnew._this = pi->_this;
+  if (!pz_e_stack_frame(b, x, pi, sf->env)) return pzNil;
+  pz_stack_frame_t *_sf = PZ_CURRENT_STACK_FRAME;
+  _sf->x = x;
+  _sf->env = e;
+
   while ((hr = pz_ht_iterate(b, ca_f(x), &h))) {
     if (pk) pz_ht_set(b, e, pk, hr->va_key);
     if (pv) pz_ht_set(b, e, pv, hr->va_value);
-    pz_eval(b, lambda_body(lambda), &pnew);
+    pz_dispatch(b, lambda_body(lambda), pi, _sf);
   }
+
+  pi->nested_depth--;
   return pzNil;
 }
 
@@ -596,11 +644,14 @@ Id pz_cmd_number_to_string(VB) {
 Id pz_load(void *b, Id _fn, pz_interp_t *pi = 0);
 Id pz_cmd_load(VB)  { return pz_load(b, ca_f(x), pi); }
 Id pz_cmd_eval(VB)  { 
-  pz_interp_t pn;
-  pz_interp_init(&pn, pi);
-  pn.last = 1;
-  pn._this = ISS("eval");
-  return pz_eval(b, ca_f(x), &pn); 
+  if (!pz_e_stack_frame(b, x, pi, sf->env)) return pzNil;
+  pz_stack_frame_t *_sf = PZ_CURRENT_STACK_FRAME;
+  _sf->x = x;
+  _sf->func_name = ISS("eval");
+  _sf->last = 1;
+  Id r = pz_dispatch(b, ca_f(x), pi, _sf); 
+  pi->nested_depth--;
+  return r;
 }
 Id pz_cmd_string_to_symbol(VB) { return pz_to_symbol(ca_f(x)); }
 Id pz_cmd_symbol_to_string(VB) { return pz_to_string(ca_f(x)); }
@@ -628,19 +679,6 @@ Id pz_cmd_dump(VB) {
     return pz_retain0(ca_s(x)); }
 Id pz_cmd_vector_append(VB) { return pz_ary_new_join(b, ca_f(x), ca_s(x)); }
 
-Id pz_cmd_makestack(VB) {
-  pz_interp_t *pinterp = pi;
-  Id a = pz_ary_new(b);
-  while (pinterp) {
-    Id r = pz_ary_new(b);
-    pz_ary_push(b, r, pinterp->_this);
-    pz_ary_push(b, r, pz_long(pz_ary_get_line_number(b, pinterp->_x)));
-    pz_ary_push(b, a, r);
-    pinterp = pinterp->previous_ip;
-  }
-  return a;
-}
-
 Id pz_cmd_hash_code(VB) { return pz_long(pz_hash_var(b, ca_f(x))); }
 Id pz_cmd_cfunc_to_bin_adr_s(VB) { return pz_cfunc_to_bin_adr_s(b, ca_f(x)); }
 Id pz_cmd_va_to_bin_adr_s(VB) { return pz_va_to_bin_adr_s(b, ca_f(x)); }
@@ -656,16 +694,16 @@ const char *pz_std_n[] = {"+", "-", "*", "/", ">", "<", ">=", "<=", "=",
     "number->string", "load", "eval", "string->symbol", "symbol->string",
     "string-append", "string-append!", "string-copy", "substring", "make-string",
     "string-length", "string-ref", "inspect", "dump", "vector-append",
-    "makestack", "hash-code", "cfunc->binary-addr-s", "va->binary-addr-s", 0};
+    "hash-code", "cfunc->binary-addr-s", "va->binary-addr-s", 0};
 
 Id (*pz_std_f[])(VB) = {pz_cmd_add, pz_cmd_sub, pz_cmd_mul, pz_cmd_div,
     pz_cmd_gt, pz_cmd_lt, pz_cmd_ge, pz_cmd_le, pz_cmd_eq_p,
     pz_cmd_equal_p, pz_cmd_eq_p, pz_cmd_length, pz_cmd_cons, pz_cmd_car,
     pz_cmd_cdr, pz_cmd_list, pz_cmd_display, pz_cmd_current_ms,
-    pz_cmd_make_hash, pz_cmd_hash_set, pz_cmd_hash_get,
-    pz_cmd_hash_delete, pz_cmd_make_vector, pz_cmd_vector_get,
-    pz_cmd_vector_set, pz_cmd_vector_push, pz_cmd_vector_pop,
-    pz_cmd_vector_shift, pz_cmd_vector_length, pz_cmd_vector_tail,
+    pz_cmd_make_hash, pz_cmd_hash_set_bang, pz_cmd_hash_get,
+    pz_cmd_hash_delete_bang, pz_cmd_make_vector, pz_cmd_vector_get,
+    pz_cmd_vector_set_bang, pz_cmd_vector_push, pz_cmd_vector_pop_bang,
+    pz_cmd_vector_shift_bang, pz_cmd_vector_length, pz_cmd_vector_tail,
     pz_cmd_string_constant, pz_cmd_string_split, pz_cmd_vector_each,
     pz_cmd_vector_find, pz_cmd_hash_each, pz_cmd_rx_match_string,
     pz_cmd_rand, pz_cmd_shl, pz_cmd_shr, pz_cmd_not, pz_cmd_sleep,
@@ -675,7 +713,7 @@ Id (*pz_std_f[])(VB) = {pz_cmd_add, pz_cmd_sub, pz_cmd_mul, pz_cmd_div,
     pz_cmd_string_append, pz_cmd_string_append_bang,
     pz_cmd_string_copy, pz_cmd_substring, pz_cmd_make_string,
     pz_cmd_string_length, pz_cmd_string_ref, pz_cmd_inspect, pz_cmd_dump,
-    pz_cmd_vector_append, pz_cmd_makestack, pz_cmd_hash_code,
+    pz_cmd_vector_append, pz_cmd_hash_code,
     pz_cmd_cfunc_to_bin_adr_s, pz_cmd_va_to_bin_adr_s, 0};
 
 
@@ -709,21 +747,15 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
   ps.filename = filename;
   ps.interactive = interactive;
   pz_interp_t pi;
-  pi.last = 1;
-  pi._env = pz_globals;
-  pi._prev = pzNil;
-  pi._this = filename;
-  pi.previous_ip = 0;
+  memset(&pi, 0, sizeof(pi));
   pi.ps = &ps;
-  pi.nested_depth = 0;
-  pi.stack_overflow = 0;
   while (1) {
     ps.line_number = 1;
     pi.stack_overflow = 0;
     pi.nested_depth = 0;
     Id parsed = pz_retain(filename, pz_parse(b, &pi,
         pz_input(b, &pi, f, pz_perf_mode ? "perf>" : "ponzi> ")));
-    Id val = pz_retain0(pz_eval(b, parsed, &pi));
+    Id val = pz_retain0(pz_e_exec_procedure(b, parsed, &pi));
     pz_release(parsed);
     if (feof(f)) break;
     if (interactive) {
@@ -735,6 +767,7 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
   }
   pz_release(filename);
 }
+
 
 Id pz_load(void *b, Id _fn, pz_interp_t *pi)  {
   const char *fn = pz_string_ptr(_fn);
