@@ -66,8 +66,6 @@
             (if bin 
               (asm-cfunc-push-parameters )
               (displayln "unknown symbol:" x0))
-            )
-        )
-      ))))
+            ))))))
 
 (displayln "compiler loaded")

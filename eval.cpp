@@ -185,60 +185,70 @@ Id pz_begin(NVB, int start) {
   return val;
 }
 
-Id pz_dispatch(void *b, Id x, pz_interp_t* pi, pz_stack_frame_t *sf) {
-  // XXX: ask: have compiled version?
-  if (!x) return pzNil;
+typedef Id (*pz_cmd_f)(NVB);
+
+pz_cmd_f pz_d(void *b, Id x, pz_interp_t* pi, pz_stack_frame_t *sf) {
+  if (!x) return (pz_cmd_f)pzNil;
   if (PZ_TYPE(x) == PZ_TYPE_SYMBOL) {
-    if (pz_string_equals_cp_i(x, "globals")) return pz_e_globals(NVP);
-    if (pz_string_equals_cp_i(x, "vars")) return pz_e_vars(NVP);
+    if (pz_string_equals_cp_i(x, "globals")) return pz_e_globals;
+    if (pz_string_equals_cp_i(x, "vars")) return pz_e_vars;
     if (pz_string_equals_cp_i(x, "string-interns")) 
-        return pz_e_string_interns(NVP);
+        return pz_e_string_interns;
     if (pz_string_equals_cp_i(x, "symbol-interns")) 
-        return pz_e_symbol_interns(NVP);
+        return pz_e_symbol_interns;
     if (pz_string_equals_cp_i(x, "string-constants")) 
-        return pz_e_string_constants(NVP);
+        return pz_e_string_constants;
     if (pz_string_equals_cp_i(x, "string-constants-dict")) 
-        return pz_e_string_constants_dict(NVP);
-    if (pz_string_equals_cp_i(x, "#t")) return pz_e_xtrue(NVP);
-    if (pz_string_equals_cp_i(x, "#f")) return pz_e_xfalse(NVP);
-    return pz_e_env_find(NVP);
-  } else if (PZ_TYPE(x) != PZ_TYPE_ARRAY) return pz_e_literal(NVP);
+        return pz_e_string_constants_dict;
+    if (pz_string_equals_cp_i(x, "#t")) return pz_e_xtrue;
+    if (pz_string_equals_cp_i(x, "#f")) return pz_e_xfalse;
+    return pz_e_env_find;
+  } else if (PZ_TYPE(x) != PZ_TYPE_ARRAY) return pz_e_literal;
   if (PZ_TYPE(x) == PZ_TYPE_ARRAY && pz_ary_len(b, x) == 3) {
     Id m = ca_s(x);
     if (PZ_TYPE(m) == PZ_TYPE_SYMBOL && pz_string_equals_cp_i(m, ".")) 
-        return pz_e_cons_pair(NVP);
+        return pz_e_cons_pair;
   }
   if (pz_ary_len(b, x) == 0) {
     RG(sg);
-    return pz_handle_parse_error_with_err_string("No proc given", 
+    return (pz_cmd_f)pz_handle_parse_error_with_err_string("No proc given", 
         pz_string_ptr(sg = pz_to_string(b, sf->func_name))); 
   }
   Id x0 = ca_f(x);
   if (!pz_is_string(x0)) {
     RG(sg);
-    return pz_handle_parse_error_with_err_string("Not a symbol type", 
+    return (pz_cmd_f)pz_handle_parse_error_with_err_string("Not a symbol type", 
         pz_string_ptr(sg = pz_to_string(b, sf->func_name)));
   }
   if (pz_string_equals_cp_i(x0, "quote")) {
-    return pz_e_quote(NVP);
+    return pz_e_quote;
   } else if (pz_string_equals_cp_i(x0, "/#")) { // (/# ^regexp$)
-    return pz_e_rx(NVP);
+    return pz_e_rx;
   } else if (pz_string_equals_cp_i(x0, "if")) { // (if test conseq alt)
-    return pz_e_xif(NVP);
+    return pz_e_xif;
   } else if (pz_string_equals_cp_i(x0, "set!")) { // (set! var exp)
-    return pz_e_set_bang(NVP);
+    return pz_e_set_bang;
   } else if (pz_string_equals_cp_i(x0, "define")) { // (define var exp)
-    return pz_e_define(NVP);
+    return pz_e_define;
   } else if (pz_string_equals_cp_i(x0, "lambda")) { //(lambda (var*) exp)
-    return pz_e_lambda(NVP);
+    return pz_e_lambda;
   } else if (pz_string_equals_cp_i(x0, "macro")) {
-    return pz_e_macro(NVP);
+    return pz_e_macro;
   } else if (pz_string_equals_cp_i(x0, "begin")) {  // (begin exp*)
-    return pz_e_begin(NVP);
+    return pz_e_begin;
   } else {  // (proc exp*)
-    return pz_e_proc(NVP);
+    return pz_e_proc;
   }
   pz_should_not_reach_here();
+}
+
+Id pz_dispatch(void *b, Id x, pz_interp_t* pi, pz_stack_frame_t *sf) {
+  pz_cmd_f cf = (pz_cmd_f)pz_have_dispatched_func_p(b, x);
+  if (cf) return (*cf)(NVP);
+  pz_cmd_f p = pz_d(b, x, pi, sf);
+  if (!p) return pzNil;
+  pz_set_dispatched_func(b, x, (void *)p);
+  return (*p)(NVP);
 }
 
 Id __pz_vector_find(NVB, int check_brk = 1) {
@@ -275,8 +285,6 @@ Id __pz_vector_find(NVB, int check_brk = 1) {
   pi->nested_depth--;
   return check_brk ? v : pzNil;
 }
-
-
 
 Id pz_string_parse(void *b, Id s) {
   if (!s) return pzNil;
@@ -716,7 +724,6 @@ Id (*pz_std_f[])(VB) = {pz_cmd_add, pz_cmd_sub, pz_cmd_mul, pz_cmd_div,
     pz_cmd_vector_append, pz_cmd_hash_code,
     pz_cmd_cfunc_to_bin_adr_s, pz_cmd_va_to_bin_adr_s, 0};
 
-
 void pz_add_std_functions(void *b, Id env) {
   int i = 0;
   while (pz_std_n[i] != 0) { pz_define_func(b, pz_std_n[i], pz_std_f[i],
@@ -768,7 +775,6 @@ void pz_repl(void *b, FILE *f, Id filename, int interactive) {
   pz_release(filename);
 }
 
-
 Id pz_load(void *b, Id _fn, pz_interp_t *pi)  {
   const char *fn = pz_string_ptr(_fn);
   FILE *f;
@@ -781,4 +787,3 @@ Id pz_load(void *b, Id _fn, pz_interp_t *pi)  {
   pz_repl(b, f, _fn, 0);
   return pzTrue;
 }
-

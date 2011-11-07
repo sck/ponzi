@@ -237,8 +237,8 @@ open_failed:
  */
 
 // for garbage collection
-// lock + rc + type + flags
-#define RCS (sizeof(int)+sizeof(int)+sizeof(short int)+sizeof(uchar))
+// lock + rc + type + compiled + flags
+#define RCS (sizeof(int)+sizeof(int)+sizeof(short int)+sizeof(void*)+sizeof(uchar))
 #define rc_t int
 #define PZ_CELL_SIZE int(PZ_STATIC_ALLOC_SIZE - RCS)
 
@@ -528,6 +528,8 @@ retry_start:
     *t = type;
     uchar *f = (uchar *)(p - sizeof(uchar));
     f = 0x0;
+    void **df = (void **)(p - sizeof(uchar) - sizeof(void*));
+    *df = 0x0;
     pz_unlock_va(r);
   }
 finish:
@@ -552,15 +554,22 @@ int pz_zero(void *b, Id va, int size) {
 
 #define PZ_ALLOC(va, type) va = pz_valloc(b, __func__, type); VA_0_R(va, pzNil);
 
-#define PZ_NO_BASIC_TYPES(v) \
-  if (!va || PZ_TYPE(va) < PZ_BASIC_TYPE_BOUNDARY) { return v; }; 
+#define PZ_NO_BASIC_TYPES(v, rv) \
+  if (!va || PZ_TYPE(va) < PZ_BASIC_TYPE_BOUNDARY) { return rv; }; 
 
-#define RCI \
-  PZ_NO_BASIC_TYPES(va); \
+#define RCI0(rv, rv2) \
+  PZ_NO_BASIC_TYPES(va, rv); \
   char *p0 = VA_TO_PTR0(va); \
+  void **df = (void **)(p0 - sizeof(uchar) - sizeof(void*)); \
   uchar *flags = (uchar *)(p0 - sizeof(uchar)); \
-  P_0_R(p0, pzNil); rc_t *rc = (rc_t *)(p0 - RCS + sizeof(int)); \
-  rc = rc; flags = flags; 
+  P_0_R(p0, rv2); rc_t *rc = (rc_t *)(p0 - RCS + sizeof(int)); \
+  rc = rc; flags = flags; df = df; 
+
+#define RCI RCI0(va, pzNil);
+
+void *pz_have_dispatched_func_p(void *b, Id va) { RCI0(0, 0); return *df; }
+int pz_set_dispatched_func(void *b, Id va, void *f) { 
+    RCI0(0, 0); *df = f; return 1; }
 
 
 Id show_rc(const char *m, void *b, Id va) {
@@ -1480,6 +1489,7 @@ struct pz_interp_t {
   pz_parse_t *ps;
   size_t nested_depth;
   int stack_overflow;
+  int in_compilation;
   pz_stack_frame_t frames[2000];
 };
 
@@ -1917,7 +1927,7 @@ int pz_dump_to_d(void *b, Id va, pz_str_d *d);
 uchar pz_dump_status[PZ_VAR_COUNT / 8];
 
 #define PZ_ONLY_REFER_TYPES(v) \
-  PZ_NO_BASIC_TYPES(v); \
+  PZ_NO_BASIC_TYPES(v, v); \
   int t = PZ_TYPE(va); \
   if (!(t == PZ_TYPE_HASH || t == PZ_TYPE_ARRAY || t == PZ_TYPE_PAIR || \
       t == PZ_TYPE_HASH_PAIR)) return v;
